@@ -1,0 +1,86 @@
+const CollectionFrequency = {
+  DAILY: 'DAILY',
+  WEEKLY: 'WEEKLY',
+  MONTHLY: 'MONTHLY',
+  CUSTOM: 'CUSTOM',
+};
+
+const FinanceStatus = {
+  PENDING: 'PENDING',
+  ACTIVE: 'ACTIVE',
+  OVERDUE: 'OVERDUE',
+  COMPLETED: 'COMPLETED',
+  CANCELLED: 'CANCELLED',
+  PAUSED: 'PAUSED',
+};
+
+const InstallmentStatus = {
+  UPCOMING: 'UPCOMING',
+  DUE: 'DUE',
+  PARTIALLY_PAID: 'PARTIALLY_PAID',
+  PAID: 'PAID',
+  OVERDUE: 'OVERDUE',
+  WAIVED: 'WAIVED',
+};
+
+const PaymentStatus = {
+  SUCCESS: 'SUCCESS',
+  PENDING: 'PENDING',
+  FAILED: 'FAILED',
+  REVERSED: 'REVERSED',
+  CANCELLED: 'CANCELLED',
+};
+
+const PaymentMethod = {
+  CASH: 'CASH',
+  UPI: 'UPI',
+  BANK_TRANSFER: 'BANK_TRANSFER',
+  CARD: 'CARD',
+  OTHER: 'OTHER',
+};
+
+const SubscriptionStatus = {
+  TRIAL: 'TRIAL',
+  ACTIVE: 'ACTIVE',
+  EXPIRED: 'EXPIRED',
+  SUSPENDED: 'SUSPENDED',
+  CANCELLED: 'CANCELLED',
+};
+
+const UserStatus = {
+  ACTIVE: 'ACTIVE',
+  INACTIVE: 'INACTIVE',
+  SUSPENDED: 'SUSPENDED',
+};
+
+const DocumentType = {
+  IDENTITY_PROOF: 'IDENTITY_PROOF',
+  ADDRESS_PROOF: 'ADDRESS_PROOF',
+  INCOME_PROOF: 'INCOME_PROOF',
+  AGREEMENT: 'AGREEMENT',
+  COLLATERAL: 'COLLATERAL',
+  OTHER: 'OTHER',
+};
+
+const NotificationType = {
+  PAYMENT_REMINDER: 'PAYMENT_REMINDER',
+  PAYMENT_SUCCESS: 'PAYMENT_SUCCESS',
+  PAYMENT_OVERDUE: 'PAYMENT_OVERDUE',
+  ACCOUNT_CREATED: 'ACCOUNT_CREATED',
+  ACCOUNT_COMPLETED: 'ACCOUNT_COMPLETED',
+  ADMIN_ANNOUNCEMENT: 'ADMIN_ANNOUNCEMENT',
+  SUBSCRIPTION_EXPIRY: 'SUBSCRIPTION_EXPIRY',
+  SYSTEM: 'SYSTEM',
+};
+
+module.exports = {
+  CollectionFrequency,
+  FinanceStatus,
+  InstallmentStatus,
+  PaymentStatus,
+  PaymentMethod,
+  SubscriptionStatus,
+  UserStatus,
+  DocumentType,
+  NotificationType,
+};

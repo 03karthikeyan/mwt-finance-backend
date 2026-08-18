@@ -1,0 +1,304 @@
+const crypto = require('crypto');
+const SuperAdmin = require('../models/SuperAdmin');
+const User = require('../models/User');
+const Company = require('../models/Company');
+const PasswordUtil = require('../utils/passwordUtil');
+const JwtUtil = require('../utils/jwtUtil');
+const ApiError = require('../utils/apiError');
+const { ROLES } = require('../config/roles');
+const { UserStatus } = require('../constants/enums');
+
+class AuthService {
+  static async login(email, password) {
+    if (!email || !password) {
+      throw ApiError.badRequest('Email and password are required');
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // 1. Check if Super Admin
+    const superAdmin = await SuperAdmin.findOne({ email: normalizedEmail }).select('+password');
+    if (superAdmin) {
+      const isMatch = await PasswordUtil.compare(password, superAdmin.password);
+      if (!isMatch) {
+        throw ApiError.unauthorized('Invalid email or password');
+      }
+      if (!superAdmin.isActive) {
+        throw ApiError.forbidden('Super Admin account is deactivated');
+      }
+
+      superAdmin.lastLogin = new Date();
+      await superAdmin.save();
+
+      const tokenPayload = {
+        id: superAdmin._id.toString(),
+        name: superAdmin.name,
+        email: superAdmin.email,
+        role: ROLES.SUPER_ADMIN,
+        companyId: null,
+      };
+
+      const accessToken = JwtUtil.generateAccessToken(tokenPayload);
+      const refreshToken = JwtUtil.generateRefreshToken(tokenPayload);
+
+      return {
+        user: {
+          id: superAdmin._id,
+          name: superAdmin.name,
+          email: superAdmin.email,
+          role: ROLES.SUPER_ADMIN,
+          company: null,
+        },
+        accessToken,
+        refreshToken,
+      };
+    }
+
+    // 2. Check Standard Tenant User
+    const user = await User.findOne({ email: normalizedEmail }).select('+password');
+    if (!user) {
+      throw ApiError.unauthorized('Invalid email or password');
+    }
+
+    const isMatch = await PasswordUtil.compare(password, user.password);
+    if (!isMatch) {
+      throw ApiError.unauthorized('Invalid email or password');
+    }
+
+    if (user.status !== UserStatus.ACTIVE) {
+      throw ApiError.forbidden(`Your account is ${user.status.toLowerCase()}. Please contact support.`);
+    }
+
+    // Verify Company status
+    let company = null;
+    if (user.companyId) {
+      company = await Company.findById(user.companyId);
+      if (!company || company.status !== 'ACTIVE') {
+        throw ApiError.forbidden('Your company account is inactive or suspended.');
+      }
+    }
+
+    user.lastLogin = new Date();
+    await user.save();
+
+    const tokenPayload = {
+      id: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      role: user.role,
+      companyId: user.companyId ? user.companyId.toString() : null,
+      branchId: user.branchId ? user.branchId.toString() : null,
+    };
+
+    const accessToken = JwtUtil.generateAccessToken(tokenPayload);
+    const refreshToken = JwtUtil.generateRefreshToken(tokenPayload);
+
+    return {
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        companyId: user.companyId,
+        company: company ? {
+          id: company._id,
+          name: company.name,
+          companyCode: company.companyCode,
+          currency: company.currency,
+          logo: company.logo,
+        } : null,
+        branchId: user.branchId,
+        mustChangePassword: user.mustChangePassword,
+      },
+      accessToken,
+      refreshToken,
+    };
+  }
+
+  static async refreshAccessToken(refreshToken) {
+    if (!refreshToken) {
+      throw ApiError.unauthorized('Refresh token is required');
+    }
+
+    const decoded = JwtUtil.verifyRefreshToken(refreshToken);
+    if (!decoded || !decoded.id) {
+      throw ApiError.unauthorized('Invalid or expired refresh token');
+    }
+
+    const tokenPayload = {
+      id: decoded.id,
+      name: decoded.name,
+      email: decoded.email,
+      role: decoded.role,
+      companyId: decoded.companyId,
+      branchId: decoded.branchId,
+    };
+
+    const newAccessToken = JwtUtil.generateAccessToken(tokenPayload);
+    const newRefreshToken = JwtUtil.generateRefreshToken(tokenPayload);
+
+    return {
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+    };
+  }
+
+  static async changePassword(userId, role, oldPassword, newPassword) {
+    if (!oldPassword || !newPassword) {
+      throw ApiError.badRequest('Old and new passwords are required');
+    }
+
+    if (newPassword.length < 6) {
+      throw ApiError.badRequest('New password must be at least 6 characters long');
+    }
+
+    let account;
+    if (role === ROLES.SUPER_ADMIN) {
+      account = await SuperAdmin.findById(userId).select('+password');
+    } else {
+      account = await User.findById(userId).select('+password');
+    }
+
+    if (!account) {
+      throw ApiError.notFound('Account not found');
+    }
+
+    const isMatch = await PasswordUtil.compare(oldPassword, account.password);
+    if (!isMatch) {
+      throw ApiError.badRequest('Current password is incorrect');
+    }
+
+    account.password = await PasswordUtil.hash(newPassword);
+    if (account.mustChangePassword !== undefined) {
+      account.mustChangePassword = false;
+    }
+    await account.save();
+
+    return { message: 'Password changed successfully' };
+  }
+
+  /**
+   * Request Password Reset OTP
+   */
+  static async forgotPassword(emailOrPhone) {
+    if (!emailOrPhone) {
+      throw ApiError.badRequest('Email or phone number is required');
+    }
+
+    const cleanInput = emailOrPhone.trim().toLowerCase();
+    const isEmail = cleanInput.includes('@');
+
+    let user = await User.findOne(
+      isEmail ? { email: cleanInput } : { phone: cleanInput }
+    ).select('+resetPasswordOtp +resetPasswordExpires');
+
+    let isSuperAdmin = false;
+    if (!user) {
+      user = await SuperAdmin.findOne(
+        isEmail ? { email: cleanInput } : { phone: cleanInput }
+      );
+      if (user) isSuperAdmin = true;
+    }
+
+    if (!user) {
+      throw ApiError.notFound('No account found with this email or phone number');
+    }
+
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const hashedOtp = crypto.createHash('sha256').update(otp).digest('hex');
+
+    user.resetPasswordOtp = hashedOtp;
+    user.resetPasswordExpires = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
+    await user.save();
+
+    // Log OTP for local development & field agent ease of access
+    console.log(`[AUTH] 🔑 Password Reset OTP for ${user.email} (${user.name}): ${otp}`);
+
+    return {
+      success: true,
+      message: `OTP sent successfully to registered ${isEmail ? 'email' : 'phone'}. Valid for 15 minutes.`,
+      emailMasked: user.email.replace(/(.{2})(.*)(?=@)/, (gp1, gp2, gp3) => gp2 + '*'.repeat(gp3.length)),
+      phoneMasked: user.phone ? user.phone.replace(/.(?=.{4})/g, '*') : '',
+      // For local testing convenience
+      devOtp: process.env.NODE_ENV !== 'production' ? otp : undefined,
+    };
+  }
+
+  /**
+   * Verify Reset OTP and generate temporary resetToken
+   */
+  static async verifyResetOtp(emailOrPhone, otp) {
+    if (!emailOrPhone || !otp) {
+      throw ApiError.badRequest('Email/Phone and OTP are required');
+    }
+
+    const cleanInput = emailOrPhone.trim().toLowerCase();
+    const isEmail = cleanInput.includes('@');
+    const hashedOtp = crypto.createHash('sha256').update(otp.trim()).digest('hex');
+
+    let user = await User.findOne({
+      ...(isEmail ? { email: cleanInput } : { phone: cleanInput }),
+      resetPasswordOtp: hashedOtp,
+      resetPasswordExpires: { $gt: new Date() },
+    }).select('+resetPasswordOtp +resetPasswordExpires +resetPasswordToken');
+
+    if (!user) {
+      throw ApiError.badRequest('Invalid or expired OTP. Please request a new one.');
+    }
+
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    user.resetPasswordToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+    user.resetPasswordOtp = undefined; // Clear OTP once verified
+    await user.save();
+
+    return {
+      success: true,
+      message: 'OTP verified successfully. You can now set your new password.',
+      resetToken,
+    };
+  }
+
+  /**
+   * Reset Password with verified resetToken
+   */
+  static async resetPassword(emailOrPhone, resetToken, newPassword) {
+    if (!emailOrPhone || !resetToken || !newPassword) {
+      throw ApiError.badRequest('All fields are required');
+    }
+
+    if (newPassword.length < 6) {
+      throw ApiError.badRequest('New password must be at least 6 characters long');
+    }
+
+    const cleanInput = emailOrPhone.trim().toLowerCase();
+    const isEmail = cleanInput.includes('@');
+    const hashedToken = crypto.createHash('sha256').update(resetToken.trim()).digest('hex');
+
+    let user = await User.findOne({
+      ...(isEmail ? { email: cleanInput } : { phone: cleanInput }),
+      resetPasswordToken: hashedToken,
+      resetPasswordExpires: { $gt: new Date() },
+    }).select('+password +resetPasswordToken +resetPasswordExpires');
+
+    if (!user) {
+      throw ApiError.badRequest('Invalid or expired reset session. Please request OTP again.');
+    }
+
+    user.password = await PasswordUtil.hash(newPassword);
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+    user.resetPasswordOtp = undefined;
+    user.mustChangePassword = false;
+    await user.save();
+
+    return {
+      success: true,
+      message: 'Password has been reset successfully! You can now log in.',
+    };
+  }
+}
+
+module.exports = AuthService;
