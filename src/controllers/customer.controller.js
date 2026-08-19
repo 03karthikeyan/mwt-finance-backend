@@ -33,39 +33,25 @@ class CustomerController {
         ];
       }
 
-      // If Field Agent, smart route, branch & customer scoping
+      // If Field Agent, scope to their branch, assigned routes or direct assignments
       if (req.user.role === 'AGENT') {
         const Agent = require('../models/Agent');
         const agentProfile = await Agent.findOne({ companyId: req.tenantId, userId: req.user.id });
         if (agentProfile) {
+          const agentConds = [];
           if (agentProfile.branchId) {
-            query.branchId = agentProfile.branchId;
+            agentConds.push({ branchId: agentProfile.branchId });
+          }
+          agentConds.push({ assignedAgentId: agentProfile._id });
+          if (Array.isArray(agentProfile.assignedRoutes) && agentProfile.assignedRoutes.length > 0) {
+            agentConds.push({ 'address.routeArea': { $in: agentProfile.assignedRoutes } });
           }
 
-          const pastCustIds = await Payment.find({
-            companyId: req.tenantId,
-            $or: [{ collectedById: req.user.id }, { agentId: agentProfile._id }],
-            status: 'SUCCESS',
-          }).distinct('customerId');
-
-          const hasRoutes = Array.isArray(agentProfile.assignedRoutes) && agentProfile.assignedRoutes.length > 0;
-          const hasAssigned = await Customer.exists({ companyId: req.tenantId, assignedAgentId: agentProfile._id });
-
-          const conds = [
-            { assignedAgentId: agentProfile._id },
-            { _id: { $in: pastCustIds } },
-          ];
-          if (hasRoutes) {
-            conds.push({ 'address.routeArea': { $in: agentProfile.assignedRoutes } });
-          }
-
-          if (hasRoutes || hasAssigned || pastCustIds.length > 0) {
-            if (query.$or) {
-              query.$and = [{ $or: query.$or }, { $or: conds }];
-              delete query.$or;
-            } else {
-              query.$or = conds;
-            }
+          if (query.$or) {
+            query.$and = [{ $or: query.$or }, { $or: agentConds }];
+            delete query.$or;
+          } else {
+            query.$or = agentConds;
           }
         }
       }

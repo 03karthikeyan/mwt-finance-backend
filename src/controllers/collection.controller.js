@@ -94,10 +94,9 @@ class CollectionController {
       const endOfDate = new Date(startOfDate);
       endOfDate.setDate(endOfDate.getDate() + 1);
 
-      // Only query accounts that were disbursed ON OR BEFORE the selected date!
+      // Query active finance accounts
       const query = {
         companyId: req.tenantId,
-        startDate: { $lt: endOfDate },
         $or: [
           { status: { $in: [FinanceStatus.ACTIVE, FinanceStatus.OVERDUE] } },
           { closedDate: { $gte: startOfDate } },
@@ -106,14 +105,34 @@ class CollectionController {
 
       if (frequency) query.frequency = frequency;
 
-      // Strict branch scoping for Field Agents
+      // Robust branch scoping for Field Agents and Admins
+      let activeBranch = null;
+      let myAgentDoc = null;
       if (req.user.role === 'AGENT') {
-        const myAgent = await Agent.findOne({ companyId: req.tenantId, userId: req.user.id });
-        if (myAgent && myAgent.branchId) {
-          query.branchId = myAgent.branchId;
+        myAgentDoc = await Agent.findOne({ companyId: req.tenantId, userId: req.user.id });
+        if (myAgentDoc && myAgentDoc.branchId) {
+          activeBranch = myAgentDoc.branchId;
         }
-      } else if (branchId) {
-        query.branchId = branchId;
+      } else if (branchId && branchId !== 'ALL') {
+        activeBranch = branchId;
+      }
+
+      if (activeBranch) {
+        const branchCustomerIds = await Customer.find({
+          companyId: req.tenantId,
+          branchId: activeBranch,
+        }).distinct('_id');
+
+        const orClauses = [
+          { branchId: activeBranch },
+          { customerId: { $in: branchCustomerIds } },
+        ];
+        if (myAgentDoc) {
+          orClauses.push({ agentId: myAgentDoc._id });
+        }
+
+        query.$and = query.$and || [];
+        query.$and.push({ $or: orClauses });
       }
 
       const accounts = await FinanceAccount.find(query)
@@ -193,97 +212,16 @@ class CollectionController {
         };
       });
 
-      // Resolve Agent Filtering
-      const Agent = require('../models/Agent');
-      let filterAgentDocId = null;
-      let filterAgentUserId = null;
-      let filterAgentRoutes = [];
-
-      if (req.user.role === 'AGENT') {
-        const myAgent = await Agent.findOne({ companyId: req.tenantId, userId: req.user.id });
-        if (myAgent) {
-          filterAgentDocId = myAgent._id.toString();
-          filterAgentUserId = req.user.id.toString();
-          filterAgentRoutes = myAgent.assignedRoutes || [];
-        }
-      } else if (agentId) {
+      // Filter by agent if explicitly selected
+      if (agentId) {
         const foundAgent = await Agent.findOne({
           companyId: req.tenantId,
           $or: [{ _id: agentId }, { userId: agentId }],
         });
-        if (foundAgent) {
-          filterAgentDocId = foundAgent._id.toString();
-          filterAgentUserId = foundAgent.userId ? foundAgent.userId.toString() : agentId;
-          filterAgentRoutes = foundAgent.assignedRoutes || [];
-        } else {
-          filterAgentDocId = agentId;
-          filterAgentUserId = agentId;
-        }
-      }
+        const filterAgentDocId = foundAgent ? foundAgent._id.toString() : agentId;
+        const filterAgentUserId = foundAgent && foundAgent.userId ? foundAgent.userId.toString() : agentId;
 
-      // Find all accounts where this agent has ever collected payments (for route attribution on tomorrow / future dates)
-      let pastCollectedAccountIds = [];
-      if (filterAgentDocId || filterAgentUserId) {
-        const pastPayments = await Payment.find({
-          companyId: req.tenantId,
-          $or: [
-            { collectedById: filterAgentUserId },
-            { collectedById: filterAgentDocId },
-            { agentId: filterAgentDocId },
-            { agentId: filterAgentUserId },
-          ].filter(Boolean),
-          status: 'SUCCESS',
-        }).distinct('financeAccountId');
-        pastCollectedAccountIds = pastPayments.map((id) => id.toString());
-      }
-
-      // Apply Agent Filter
-      if (req.user.role === 'AGENT') {
-        const hasRoutes = filterAgentRoutes.length > 0;
-        const hasAssignedAccounts = accounts.some((a) => {
-          const aId = a.agentId ? (a.agentId._id ? a.agentId._id.toString() : a.agentId.toString()) : '';
-          const uId = a.agentId && a.agentId.userId ? (a.agentId.userId._id ? a.agentId.userId._id.toString() : a.agentId.userId.toString()) : '';
-          return aId === filterAgentDocId || uId === filterAgentUserId;
-        });
-        const hasPastCollections = pastCollectedAccountIds.length > 0;
-
-        if (hasRoutes || hasAssignedAccounts || hasPastCollections) {
-          sheet = sheet.filter((item) => {
-            const accIdStr = item.accountId.toString();
-            const assignedAgentId = item.agent?._id ? item.agent._id.toString() : '';
-            const assignedUserId = item.agent?.userId?._id
-              ? item.agent.userId._id.toString()
-              : item.agent?.userId
-              ? item.agent.userId.toString()
-              : '';
-            const customerAgentId = item.customer?.assignedAgentId ? item.customer.assignedAgentId.toString() : '';
-            const customerRoute = item.customer?.address?.routeArea || '';
-
-            const matchAssigned =
-              assignedAgentId === filterAgentDocId ||
-              assignedAgentId === filterAgentUserId ||
-              assignedUserId === filterAgentDocId ||
-              assignedUserId === filterAgentUserId ||
-              customerAgentId === filterAgentDocId ||
-              customerAgentId === filterAgentUserId;
-
-            const matchRoute = hasRoutes && filterAgentRoutes.includes(customerRoute);
-
-            const matchCollector = paymentsByAccountId[accIdStr]?.some((p) => {
-              const pCollectorId = p.collectedById ? (p.collectedById._id ? p.collectedById._id.toString() : p.collectedById.toString()) : '';
-              const pAgentId = p.agentId ? p.agentId.toString() : '';
-              return pCollectorId === filterAgentDocId || pCollectorId === filterAgentUserId || pAgentId === filterAgentDocId || pAgentId === filterAgentUserId;
-            });
-
-            const matchEverCollected = pastCollectedAccountIds.includes(accIdStr);
-
-            return matchAssigned || matchRoute || matchCollector || matchEverCollected;
-          });
-        }
-      } else if (filterAgentDocId || filterAgentUserId) {
-        // Admin / Manager filtered by a specific staff member
         sheet = sheet.filter((item) => {
-          const accIdStr = item.accountId.toString();
           const assignedAgentId = item.agent?._id ? item.agent._id.toString() : '';
           const assignedUserId = item.agent?.userId?._id
             ? item.agent.userId._id.toString()
@@ -291,27 +229,15 @@ class CollectionController {
             ? item.agent.userId.toString()
             : '';
           const customerAgentId = item.customer?.assignedAgentId ? item.customer.assignedAgentId.toString() : '';
-          const customerRoute = item.customer?.address?.routeArea || '';
 
-          const matchAssigned =
+          return (
             assignedAgentId === filterAgentDocId ||
             assignedAgentId === filterAgentUserId ||
             assignedUserId === filterAgentDocId ||
             assignedUserId === filterAgentUserId ||
             customerAgentId === filterAgentDocId ||
-            customerAgentId === filterAgentUserId;
-
-          const matchRoute = filterAgentRoutes.length > 0 && filterAgentRoutes.includes(customerRoute);
-
-          const matchCollector = paymentsByAccountId[accIdStr]?.some((p) => {
-            const pCollectorId = p.collectedById ? (p.collectedById._id ? p.collectedById._id.toString() : p.collectedById.toString()) : '';
-            const pAgentId = p.agentId ? p.agentId.toString() : '';
-            return pCollectorId === filterAgentDocId || pCollectorId === filterAgentUserId || pAgentId === filterAgentDocId || pAgentId === filterAgentUserId;
-          });
-
-          const matchEverCollected = pastCollectedAccountIds.includes(accIdStr);
-
-          return matchAssigned || matchRoute || matchCollector || matchEverCollected;
+            customerAgentId === filterAgentUserId
+          );
         });
       }
 
