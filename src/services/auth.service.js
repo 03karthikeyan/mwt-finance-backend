@@ -81,6 +81,15 @@ class AuthService {
     user.lastLogin = new Date();
     await user.save();
 
+    let agentDoc = null;
+    if (user.role === ROLES.AGENT) {
+      const Agent = require('../models/Agent');
+      agentDoc = await Agent.findOne({ userId: user._id, companyId: user.companyId });
+    }
+
+    const finalProfileImage = user.profileImage || (agentDoc ? agentDoc.profileImage : '') || '';
+    const finalBranchId = user.branchId || (agentDoc ? agentDoc.branchId : null);
+
     const tokenPayload = {
       id: user._id.toString(),
       name: user.name,
@@ -88,7 +97,7 @@ class AuthService {
       phone: user.phone,
       role: user.role,
       companyId: user.companyId ? user.companyId.toString() : null,
-      branchId: user.branchId ? user.branchId.toString() : null,
+      branchId: finalBranchId ? finalBranchId.toString() : null,
     };
 
     const accessToken = JwtUtil.generateAccessToken(tokenPayload);
@@ -101,6 +110,7 @@ class AuthService {
         email: user.email,
         phone: user.phone,
         role: user.role,
+        profileImage: finalProfileImage,
         companyId: user.companyId,
         company: company ? {
           id: company._id,
@@ -109,7 +119,7 @@ class AuthService {
           currency: company.currency,
           logo: company.logo,
         } : null,
-        branchId: user.branchId,
+        branchId: finalBranchId,
         mustChangePassword: user.mustChangePassword,
       },
       accessToken,

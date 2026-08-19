@@ -41,14 +41,24 @@ const authenticate = async (req, res, next) => {
         return next(ApiError.forbidden(`Your account is ${user.status.toLowerCase()}. Please contact your administrator.`));
       }
 
+      let agentDoc = null;
+      if (user.role === ROLES.AGENT) {
+        const Agent = require('../models/Agent');
+        agentDoc = await Agent.findOne({ userId: user._id, companyId: user.companyId });
+      }
+
+      const finalProfileImage = user.profileImage || (agentDoc ? agentDoc.profileImage : '') || '';
+      const finalBranchId = user.branchId || (agentDoc ? agentDoc.branchId : null);
+
       req.user = {
         id: user._id.toString(),
         name: user.name,
         email: user.email,
         phone: user.phone,
         role: user.role,
+        profileImage: finalProfileImage,
         companyId: user.companyId ? user.companyId.toString() : null,
-        branchId: user.branchId ? user.branchId.toString() : null,
+        branchId: finalBranchId ? finalBranchId.toString() : null,
         customPermissions: user.customPermissions || [],
       };
     }
