@@ -33,11 +33,15 @@ class CustomerController {
         ];
       }
 
-      // If Field Agent, smart route & customer scoping
+      // If Field Agent, smart route, branch & customer scoping
       if (req.user.role === 'AGENT') {
         const Agent = require('../models/Agent');
         const agentProfile = await Agent.findOne({ companyId: req.tenantId, userId: req.user.id });
         if (agentProfile) {
+          if (agentProfile.branchId) {
+            query.branchId = agentProfile.branchId;
+          }
+
           const pastCustIds = await Payment.find({
             companyId: req.tenantId,
             $or: [{ collectedById: req.user.id }, { agentId: agentProfile._id }],

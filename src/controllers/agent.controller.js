@@ -17,9 +17,16 @@ class AgentController {
    */
   static async getAgents(req, res, next) {
     try {
-      const { page = 1, limit = 10, search = '', status } = req.query;
+      const { page = 1, limit = 50, search = '', status, branchId } = req.query;
       const query = { companyId: req.tenantId };
       if (status) query.status = status;
+      if (branchId) query.branchId = branchId;
+
+      if (search) {
+        query.$or = [
+          { agentCode: { $regex: search, $options: 'i' } },
+        ];
+      }
 
       const skip = (Number(page) - 1) * Number(limit);
       const [agents, total] = await Promise.all([
@@ -53,6 +60,11 @@ class AgentController {
         assignedRoutes = [],
         dailyTarget = 0,
         commissionPercentage = 0,
+        profileImage = '',
+        proofType = 'Aadhaar Card',
+        proofNumber = '',
+        emergencyContact = {},
+        address = {},
       } = req.body;
 
       // Check existing email
@@ -83,6 +95,7 @@ class AgentController {
         phone,
         role: ROLES.AGENT,
         status: 'ACTIVE',
+        profileImage: profileImage || '',
       });
       await user.save();
 
@@ -94,6 +107,11 @@ class AgentController {
         assignedRoutes,
         dailyTarget,
         commissionPercentage,
+        profileImage: profileImage || '',
+        proofType: proofType || 'Aadhaar Card',
+        proofNumber: proofNumber || '',
+        emergencyContact: emergencyContact || {},
+        address: address || {},
         status: 'ACTIVE',
       });
       await agent.save();
@@ -111,7 +129,7 @@ class AgentController {
 
       return ApiResponse.created(res, 'Agent created successfully', {
         agent,
-        user: { id: user._id, name: user.name, email: user.email, phone: user.phone },
+        user: { id: user._id, name: user.name, email: user.email, phone: user.phone, profileImage: user.profileImage },
       });
     } catch (error) {
       next(error);
@@ -362,7 +380,20 @@ class AgentController {
   static async updateAgent(req, res, next) {
     try {
       const { id } = req.params;
-      const { name, phone, dailyTarget, assignedRoutes, status, password } = req.body;
+      const {
+        name,
+        phone,
+        dailyTarget,
+        assignedRoutes,
+        status,
+        password,
+        branchId,
+        proofType,
+        proofNumber,
+        emergencyContact,
+        address,
+        profileImage,
+      } = req.body;
 
       const agent = await Agent.findOne({ _id: id, companyId: req.tenantId });
       if (!agent) {
@@ -372,12 +403,20 @@ class AgentController {
       if (dailyTarget !== undefined) agent.dailyTarget = dailyTarget;
       if (assignedRoutes !== undefined) agent.assignedRoutes = assignedRoutes;
       if (status !== undefined) agent.status = status;
+      if (branchId !== undefined) agent.branchId = branchId || null;
+      if (proofType !== undefined) agent.proofType = proofType;
+      if (proofNumber !== undefined) agent.proofNumber = proofNumber;
+      if (emergencyContact !== undefined) agent.emergencyContact = emergencyContact;
+      if (address !== undefined) agent.address = address;
+      if (profileImage !== undefined) agent.profileImage = profileImage;
       await agent.save();
 
       const userUpdates = {};
       if (name) userUpdates.name = name;
       if (phone) userUpdates.phone = phone;
       if (status) userUpdates.status = status;
+      if (branchId !== undefined) userUpdates.branchId = branchId || null;
+      if (profileImage !== undefined) userUpdates.profileImage = profileImage;
       if (password) userUpdates.password = await PasswordUtil.hash(password);
 
       if (Object.keys(userUpdates).length > 0 && agent.userId) {

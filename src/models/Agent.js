@@ -51,6 +51,30 @@ const agentSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+    profileImage: {
+      type: String,
+      default: '',
+    },
+    proofType: {
+      type: String,
+      default: 'Aadhaar Card',
+    },
+    proofNumber: {
+      type: String,
+      default: '',
+    },
+    emergencyContact: {
+      name: { type: String, default: '' },
+      phone: { type: String, default: '' },
+      relation: { type: String, default: '' },
+    },
+    address: {
+      street: { type: String, default: '' },
+      city: { type: String, default: '' },
+      district: { type: String, default: '' },
+      state: { type: String, default: 'Tamil Nadu' },
+      pincode: { type: String, default: '' },
+    },
   },
   {
     timestamps: true,
@@ -59,6 +83,7 @@ const agentSchema = new mongoose.Schema(
 
 agentSchema.index({ companyId: 1, agentCode: 1 }, { unique: true });
 agentSchema.index({ companyId: 1, userId: 1 }, { unique: true });
+agentSchema.index({ companyId: 1, branchId: 1, status: 1 });
 agentSchema.index({ companyId: 1, status: 1 });
 
 module.exports = mongoose.model('Agent', agentSchema);

@@ -10,23 +10,25 @@ class ReportService {
   /**
    * Daily Collection Summary Report
    */
-  static async getDailyCollectionReport(companyId, targetDate = new Date()) {
+  static async getDailyCollectionReport(companyId, targetDate = new Date(), branchId = null) {
     const cid = new mongoose.Types.ObjectId(companyId);
+    const bid = branchId && mongoose.Types.ObjectId.isValid(branchId) ? new mongoose.Types.ObjectId(branchId) : null;
     const startOfDay = new Date(targetDate);
     startOfDay.setHours(0, 0, 0, 0);
 
     const endOfDay = new Date(targetDate);
     endOfDay.setHours(23, 59, 59, 999);
 
+    const paymentMatch = {
+      companyId: cid,
+      paymentDate: { $gte: startOfDay, $lte: endOfDay },
+      status: 'SUCCESS',
+    };
+    if (bid) paymentMatch.branchId = bid;
+
     // 1. Total Collected Today
     const collectionAgg = await Payment.aggregate([
-      {
-        $match: {
-          companyId: cid,
-          paymentDate: { $gte: startOfDay, $lte: endOfDay },
-          status: 'SUCCESS',
-        },
-      },
+      { $match: paymentMatch },
       {
         $group: {
           _id: null,
@@ -40,27 +42,44 @@ class ReportService {
     const collectedStats = collectionAgg[0] || { totalCollected: 0, totalPenalty: 0, totalTransactions: 0 };
 
     // 2. Expected Collection Today (Installments due today)
-    const expectedAgg = await Installment.aggregate([
+    const expectedPipeline = [
       {
         $match: {
           companyId: cid,
           dueDate: { $gte: startOfDay, $lte: endOfDay },
         },
       },
-      {
-        $group: {
-          _id: null,
-          totalExpected: { $sum: '$expectedAmount' },
-          totalPaidOnDue: { $sum: '$paidAmount' },
-          dueCount: { $sum: 1 },
-        },
-      },
-    ]);
+    ];
 
+    if (bid) {
+      expectedPipeline.push(
+        {
+          $lookup: {
+            from: 'financeaccounts',
+            localField: 'financeAccountId',
+            foreignField: '_id',
+            as: 'account',
+          },
+        },
+        { $unwind: '$account' },
+        { $match: { 'account.branchId': bid } }
+      );
+    }
+
+    expectedPipeline.push({
+      $group: {
+        _id: null,
+        totalExpected: { $sum: '$expectedAmount' },
+        totalPaidOnDue: { $sum: '$paidAmount' },
+        dueCount: { $sum: 1 },
+      },
+    });
+
+    const expectedAgg = await Installment.aggregate(expectedPipeline);
     const expectedStats = expectedAgg[0] || { totalExpected: 0, totalPaidOnDue: 0, dueCount: 0 };
 
     // 3. Overdue installments as of today
-    const overdueAgg = await Installment.aggregate([
+    const overduePipeline = [
       {
         $match: {
           companyId: cid,
@@ -68,15 +87,32 @@ class ReportService {
           status: { $in: [InstallmentStatus.UPCOMING, InstallmentStatus.DUE, InstallmentStatus.OVERDUE, InstallmentStatus.PARTIALLY_PAID] },
         },
       },
-      {
-        $group: {
-          _id: null,
-          totalOverdue: { $sum: '$remainingAmount' },
-          overdueCount: { $sum: 1 },
-        },
-      },
-    ]);
+    ];
 
+    if (bid) {
+      overduePipeline.push(
+        {
+          $lookup: {
+            from: 'financeaccounts',
+            localField: 'financeAccountId',
+            foreignField: '_id',
+            as: 'account',
+          },
+        },
+        { $unwind: '$account' },
+        { $match: { 'account.branchId': bid } }
+      );
+    }
+
+    overduePipeline.push({
+      $group: {
+        _id: null,
+        totalOverdue: { $sum: '$remainingAmount' },
+        overdueCount: { $sum: 1 },
+      },
+    });
+
+    const overdueAgg = await Installment.aggregate(overduePipeline);
     const overdueStats = overdueAgg[0] || { totalOverdue: 0, overdueCount: 0 };
 
     const expected = expectedStats.totalExpected;
@@ -99,20 +135,22 @@ class ReportService {
   /**
    * Weekly Collection Report (Last 7 Days)
    */
-  static async getWeeklyCollectionReport(companyId) {
+  static async getWeeklyCollectionReport(companyId, branchId = null) {
     const cid = new mongoose.Types.ObjectId(companyId);
+    const bid = branchId && mongoose.Types.ObjectId.isValid(branchId) ? new mongoose.Types.ObjectId(branchId) : null;
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
     sevenDaysAgo.setHours(0, 0, 0, 0);
 
+    const matchCond = {
+      companyId: cid,
+      paymentDate: { $gte: sevenDaysAgo },
+      status: 'SUCCESS',
+    };
+    if (bid) matchCond.branchId = bid;
+
     const dailyTrends = await Payment.aggregate([
-      {
-        $match: {
-          companyId: cid,
-          paymentDate: { $gte: sevenDaysAgo },
-          status: 'SUCCESS',
-        },
-      },
+      { $match: matchCond },
       {
         $group: {
           _id: {
@@ -139,21 +177,23 @@ class ReportService {
   /**
    * Monthly Collection Report (12 Months Trend)
    */
-  static async getMonthlyCollectionReport(companyId) {
+  static async getMonthlyCollectionReport(companyId, branchId = null) {
     const cid = new mongoose.Types.ObjectId(companyId);
+    const bid = branchId && mongoose.Types.ObjectId.isValid(branchId) ? new mongoose.Types.ObjectId(branchId) : null;
     const twelveMonthsAgo = new Date();
     twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 11);
     twelveMonthsAgo.setDate(1);
     twelveMonthsAgo.setHours(0, 0, 0, 0);
 
+    const matchCond = {
+      companyId: cid,
+      paymentDate: { $gte: twelveMonthsAgo },
+      status: 'SUCCESS',
+    };
+    if (bid) matchCond.branchId = bid;
+
     const monthlyTrends = await Payment.aggregate([
-      {
-        $match: {
-          companyId: cid,
-          paymentDate: { $gte: twelveMonthsAgo },
-          status: 'SUCCESS',
-        },
-      },
+      { $match: matchCond },
       {
         $group: {
           _id: {
@@ -178,16 +218,18 @@ class ReportService {
   /**
    * Agent Performance Ranking Report
    */
-  static async getAgentPerformanceReport(companyId) {
+  static async getAgentPerformanceReport(companyId, branchId = null) {
     const cid = new mongoose.Types.ObjectId(companyId);
+    const bid = branchId && mongoose.Types.ObjectId.isValid(branchId) ? new mongoose.Types.ObjectId(branchId) : null;
+
+    const matchCond = {
+      companyId: cid,
+      status: 'SUCCESS',
+    };
+    if (bid) matchCond.branchId = bid;
 
     const agentStats = await Payment.aggregate([
-      {
-        $match: {
-          companyId: cid,
-          status: 'SUCCESS',
-        },
-      },
+      { $match: matchCond },
       {
         $group: {
           _id: '$agentId',
@@ -233,14 +275,16 @@ class ReportService {
   /**
    * Defaulter / Overdue Aging Report
    */
-  static async getDefaultersReport(companyId) {
+  static async getDefaultersReport(companyId, branchId = null) {
     const now = new Date();
-
-    const overdueAccounts = await FinanceAccount.find({
+    const query = {
       companyId,
       status: { $in: [FinanceStatus.ACTIVE, FinanceStatus.OVERDUE] },
       nextDueDate: { $lt: now },
-    })
+    };
+    if (branchId) query.branchId = branchId;
+
+    const overdueAccounts = await FinanceAccount.find(query)
       .populate('customerId', 'name phone customerCode address')
       .populate('agentId')
       .populate('productId', 'name frequency')
@@ -272,13 +316,36 @@ class ReportService {
   /**
    * Company Executive Dashboard Metrics
    */
-  static async getCompanyDashboardMetrics(companyId) {
+  static async getCompanyDashboardMetrics(companyId, branchId = null) {
     const cid = new mongoose.Types.ObjectId(companyId);
+    const bid = branchId && mongoose.Types.ObjectId.isValid(branchId) ? new mongoose.Types.ObjectId(branchId) : null;
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
 
     const endOfToday = new Date();
     endOfToday.setHours(23, 59, 59, 999);
+
+    const custQuery = { companyId, status: 'ACTIVE' };
+    const actAccQuery = { companyId, status: { $in: [FinanceStatus.ACTIVE, FinanceStatus.OVERDUE] } };
+    const compAccQuery = { companyId, status: FinanceStatus.COMPLETED };
+    const agentQuery = { companyId, status: 'ACTIVE' };
+
+    if (bid) {
+      custQuery.branchId = bid;
+      actAccQuery.branchId = bid;
+      compAccQuery.branchId = bid;
+      agentQuery.branchId = bid;
+    }
+
+    const payMatch = {
+      companyId: cid,
+      paymentDate: { $gte: startOfToday, $lte: endOfToday },
+      status: 'SUCCESS',
+    };
+    if (bid) payMatch.branchId = bid;
+
+    const finMatch = { companyId: cid };
+    if (bid) finMatch.branchId = bid;
 
     const [
       totalCustomers,
@@ -288,18 +355,12 @@ class ReportService {
       todayCollectionAgg,
       totalDisbursedAgg,
     ] = await Promise.all([
-      Customer.countDocuments({ companyId, status: 'ACTIVE' }),
-      FinanceAccount.countDocuments({ companyId, status: { $in: [FinanceStatus.ACTIVE, FinanceStatus.OVERDUE] } }),
-      FinanceAccount.countDocuments({ companyId, status: FinanceStatus.COMPLETED }),
-      Agent.countDocuments({ companyId, status: 'ACTIVE' }),
+      Customer.countDocuments(custQuery),
+      FinanceAccount.countDocuments(actAccQuery),
+      FinanceAccount.countDocuments(compAccQuery),
+      Agent.countDocuments(agentQuery),
       Payment.aggregate([
-        {
-          $match: {
-            companyId: cid,
-            paymentDate: { $gte: startOfToday, $lte: endOfToday },
-            status: 'SUCCESS',
-          },
-        },
+        { $match: payMatch },
         {
           $group: {
             _id: null,
@@ -309,7 +370,7 @@ class ReportService {
         },
       ]),
       FinanceAccount.aggregate([
-        { $match: { companyId: cid } },
+        { $match: finMatch },
         {
           $group: {
             _id: null,

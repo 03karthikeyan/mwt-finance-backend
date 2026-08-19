@@ -7,10 +7,11 @@ const ApiResponse = require('../utils/apiResponse');
 class ReportController {
   static async getDailyReport(req, res, next) {
     try {
-      const { date } = req.query;
+      const { date, branchId } = req.query;
       const report = await ReportService.getDailyCollectionReport(
         req.tenantId,
-        date ? new Date(date) : new Date()
+        date ? new Date(date) : new Date(),
+        branchId
       );
       return ApiResponse.success(res, 'Daily collection report', report);
     } catch (error) {
@@ -20,7 +21,8 @@ class ReportController {
 
   static async getWeeklyReport(req, res, next) {
     try {
-      const report = await ReportService.getWeeklyCollectionReport(req.tenantId);
+      const { branchId } = req.query;
+      const report = await ReportService.getWeeklyCollectionReport(req.tenantId, branchId);
       return ApiResponse.success(res, 'Weekly collection report', report);
     } catch (error) {
       next(error);
@@ -29,7 +31,8 @@ class ReportController {
 
   static async getMonthlyReport(req, res, next) {
     try {
-      const report = await ReportService.getMonthlyCollectionReport(req.tenantId);
+      const { branchId } = req.query;
+      const report = await ReportService.getMonthlyCollectionReport(req.tenantId, branchId);
       return ApiResponse.success(res, 'Monthly collection report', report);
     } catch (error) {
       next(error);
@@ -38,7 +41,8 @@ class ReportController {
 
   static async getAgentPerformanceReport(req, res, next) {
     try {
-      const report = await ReportService.getAgentPerformanceReport(req.tenantId);
+      const { branchId } = req.query;
+      const report = await ReportService.getAgentPerformanceReport(req.tenantId, branchId);
       return ApiResponse.success(res, 'Agent performance report', report);
     } catch (error) {
       next(error);
@@ -47,7 +51,8 @@ class ReportController {
 
   static async getDefaultersReport(req, res, next) {
     try {
-      const report = await ReportService.getDefaultersReport(req.tenantId);
+      const { branchId } = req.query;
+      const report = await ReportService.getDefaultersReport(req.tenantId, branchId);
       return ApiResponse.success(res, 'Defaulters and overdue report', report);
     } catch (error) {
       next(error);

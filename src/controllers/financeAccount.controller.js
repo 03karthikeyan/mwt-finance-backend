@@ -18,17 +18,19 @@ class FinanceAccountController {
     try {
       const {
         page = 1,
-        limit = 10,
+        limit = 20,
         search = '',
         status,
         frequency,
         agentId,
         customerId,
+        branchId,
       } = req.query;
 
       const query = { companyId: req.tenantId };
       if (status) query.status = status;
       if (frequency) query.frequency = frequency;
+      if (branchId) query.branchId = branchId;
       if (agentId) query.agentId = agentId;
       if (customerId) query.customerId = customerId;
 
@@ -36,11 +38,14 @@ class FinanceAccountController {
         query.accountNumber = { $regex: search, $options: 'i' };
       }
 
-      // If Field Agent, only show accounts assigned to this agent
+      // If Field Agent, only show accounts assigned to this agent and their branch
       if (req.user.role === 'AGENT') {
         const agentProfile = await Agent.findOne({ companyId: req.tenantId, userId: req.user.id });
         if (agentProfile) {
           query.agentId = agentProfile._id;
+          if (agentProfile.branchId) {
+            query.branchId = agentProfile.branchId;
+          }
         }
       }
 

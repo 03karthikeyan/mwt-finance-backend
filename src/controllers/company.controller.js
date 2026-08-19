@@ -11,7 +11,8 @@ class CompanyController {
    */
   static async getDashboard(req, res, next) {
     try {
-      const metrics = await ReportService.getCompanyDashboardMetrics(req.tenantId);
+      const { branchId } = req.query;
+      const metrics = await ReportService.getCompanyDashboardMetrics(req.tenantId, branchId);
       return ApiResponse.success(res, 'Dashboard metrics retrieved', metrics);
     } catch (error) {
       next(error);
