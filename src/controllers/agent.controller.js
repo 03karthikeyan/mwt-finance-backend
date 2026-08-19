@@ -450,6 +450,25 @@ class AgentController {
       next(error);
     }
   }
+
+  /**
+   * Get logged-in Agent's full profile details
+   */
+  static async getMyAgentProfile(req, res, next) {
+    try {
+      const agent = await Agent.findOne({ userId: req.user.id, companyId: req.tenantId })
+        .populate('userId', 'name email phone status profileImage role')
+        .populate('branchId', 'name branchCode address phone email');
+
+      if (!agent) {
+        throw ApiError.notFound('Agent profile not found for this user account');
+      }
+
+      return ApiResponse.success(res, 'Agent profile retrieved', agent);
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 module.exports = AgentController;

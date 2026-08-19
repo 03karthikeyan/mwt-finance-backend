@@ -12,6 +12,7 @@ const router = express.Router();
 router.use(authenticate, requireTenant);
 
 // Agent specific dashboard & assigned customers list
+router.get('/me', AgentController.getMyAgentProfile);
 router.get('/my-dashboard', AgentController.getAgentDashboard);
 router.get('/my-customers', AgentController.getMyAssignedCustomers);
 
