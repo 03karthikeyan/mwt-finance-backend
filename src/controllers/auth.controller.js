@@ -92,7 +92,22 @@ class AuthController {
 
   static async getProfile(req, res, next) {
     try {
-      return ApiResponse.success(res, 'Profile retrieved', req.user);
+      const Company = require('../models/Company');
+      let company = null;
+      if (req.user.companyId) {
+        company = await Company.findById(req.user.companyId).select('name companyCode currency logo');
+      }
+
+      return ApiResponse.success(res, 'Profile retrieved', {
+        ...req.user,
+        company: company ? {
+          id: company._id,
+          name: company.name,
+          companyCode: company.companyCode,
+          currency: company.currency,
+          logo: company.logo,
+        } : null,
+      });
     } catch (error) {
       next(error);
     }
