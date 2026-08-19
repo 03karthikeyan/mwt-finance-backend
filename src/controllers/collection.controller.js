@@ -105,7 +105,16 @@ class CollectionController {
       };
 
       if (frequency) query.frequency = frequency;
-      if (branchId) query.branchId = branchId;
+
+      // Strict branch scoping for Field Agents
+      if (req.user.role === 'AGENT') {
+        const myAgent = await Agent.findOne({ companyId: req.tenantId, userId: req.user.id });
+        if (myAgent && myAgent.branchId) {
+          query.branchId = myAgent.branchId;
+        }
+      } else if (branchId) {
+        query.branchId = branchId;
+      }
 
       const accounts = await FinanceAccount.find(query)
         .populate('customerId')

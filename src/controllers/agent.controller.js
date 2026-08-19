@@ -23,15 +23,25 @@ class AgentController {
       if (branchId) query.branchId = branchId;
 
       if (search) {
+        const matchingUsers = await User.find({
+          companyId: req.tenantId,
+          $or: [
+            { name: { $regex: search, $options: 'i' } },
+            { phone: { $regex: search, $options: 'i' } },
+            { email: { $regex: search, $options: 'i' } },
+          ],
+        }).distinct('_id');
+
         query.$or = [
           { agentCode: { $regex: search, $options: 'i' } },
+          { userId: { $in: matchingUsers } },
         ];
       }
 
       const skip = (Number(page) - 1) * Number(limit);
       const [agents, total] = await Promise.all([
         Agent.find(query)
-          .populate('userId', 'name email phone status profileImage')
+          .populate('userId', 'name email phone status profileImage role')
           .populate('branchId', 'name branchCode')
           .sort({ createdAt: -1 })
           .skip(skip)
@@ -39,7 +49,51 @@ class AgentController {
         Agent.countDocuments(query),
       ]);
 
-      return ApiResponse.success(res, 'Agents retrieved', agents, 200, { page, limit, total });
+      // Calculate live total collections for accurate display
+      const agentIds = agents.map((a) => a._id);
+      const agentUserIds = agents.map((a) => (a.userId ? a.userId._id : null)).filter(Boolean);
+
+      const liveStatsAgg = await Payment.aggregate([
+        {
+          $match: {
+            companyId: req.tenantId,
+            $or: [
+              { agentId: { $in: agentIds } },
+              { collectedById: { $in: agentUserIds } },
+            ],
+            status: 'SUCCESS',
+          },
+        },
+        {
+          $group: {
+            _id: '$agentId',
+            collectedById: { $first: '$collectedById' },
+            totalCollected: { $sum: '$amount' },
+          },
+        },
+      ]);
+
+      const statsByAgentId = {};
+      const statsByUserId = {};
+      liveStatsAgg.forEach((s) => {
+        if (s._id) statsByAgentId[s._id.toString()] = s.totalCollected;
+        if (s.collectedById) statsByUserId[s.collectedById.toString()] = s.totalCollected;
+      });
+
+      const agentsWithStats = agents.map((a) => {
+        const aDoc = a.toObject ? a.toObject() : a;
+        const liveTotal = statsByAgentId[a._id.toString()] ||
+          (a.userId ? statsByUserId[a.userId._id ? a.userId._id.toString() : a.userId.toString()] : null) ||
+          a.totalCollected ||
+          0;
+        return {
+          ...aDoc,
+          totalCollected: liveTotal,
+          profileImage: aDoc.profileImage || (aDoc.userId ? aDoc.userId.profileImage : ''),
+        };
+      });
+
+      return ApiResponse.success(res, 'Agents retrieved', agentsWithStats, 200, { page, limit, total });
     } catch (error) {
       next(error);
     }
@@ -423,7 +477,11 @@ class AgentController {
         await User.findByIdAndUpdate(agent.userId, userUpdates);
       }
 
-      return ApiResponse.success(res, 'Agent profile updated successfully', agent);
+      const populatedAgent = await Agent.findById(agent._id)
+        .populate('userId', 'name email phone status profileImage role')
+        .populate('branchId', 'name branchCode address phone email');
+
+      return ApiResponse.success(res, 'Agent profile updated successfully', populatedAgent);
     } catch (error) {
       next(error);
     }
@@ -464,7 +522,46 @@ class AgentController {
         throw ApiError.notFound('Agent profile not found for this user account');
       }
 
-      return ApiResponse.success(res, 'Agent profile retrieved', agent);
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+
+      const endOfToday = new Date();
+      endOfToday.setHours(23, 59, 59, 999);
+
+      // Compute live total collections and today collections
+      const [totalCollectedAgg, todayCollectedAgg] = await Promise.all([
+        Payment.aggregate([
+          {
+            $match: {
+              companyId: req.tenantId,
+              $or: [{ agentId: agent._id }, { collectedById: req.user.id }],
+              status: 'SUCCESS',
+            },
+          },
+          { $group: { _id: null, total: { $sum: '$amount' } } },
+        ]),
+        Payment.aggregate([
+          {
+            $match: {
+              companyId: req.tenantId,
+              $or: [{ agentId: agent._id }, { collectedById: req.user.id }],
+              paymentDate: { $gte: startOfToday, $lte: endOfToday },
+              status: 'SUCCESS',
+            },
+          },
+          { $group: { _id: null, total: { $sum: '$amount' } } },
+        ]),
+      ]);
+
+      const liveTotalCollected = totalCollectedAgg[0] ? totalCollectedAgg[0].total : (agent.totalCollected || 0);
+      const liveTodayCollected = todayCollectedAgg[0] ? todayCollectedAgg[0].total : 0;
+
+      const agentDoc = agent.toObject ? agent.toObject() : agent;
+      agentDoc.totalCollected = liveTotalCollected;
+      agentDoc.todayCollected = liveTodayCollected;
+      agentDoc.profileImage = agentDoc.profileImage || (agentDoc.userId ? agentDoc.userId.profileImage : '');
+
+      return ApiResponse.success(res, 'Agent profile retrieved', agentDoc);
     } catch (error) {
       next(error);
     }

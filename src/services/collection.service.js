@@ -67,7 +67,27 @@ class CollectionService {
     // Fetch company details for receipt
     const company = await Company.findById(companyId);
     const customer = await Customer.findOne({ _id: account.customerId, companyId });
-    const agent = await Agent.findOne({ _id: agentId || account.agentId, companyId }).populate('userId', 'name phone');
+
+    // Robust Agent lookup: check agentId (which could be Agent._id or User._id), collectedById, or account.agentId
+    let agent = null;
+    if (agentId) {
+      agent = await Agent.findOne({
+        companyId,
+        $or: [{ _id: agentId }, { userId: agentId }],
+      }).populate('userId', 'name phone');
+    }
+    if (!agent && collectedById) {
+      agent = await Agent.findOne({
+        companyId,
+        userId: collectedById,
+      }).populate('userId', 'name phone');
+    }
+    if (!agent && account.agentId) {
+      agent = await Agent.findOne({
+        companyId,
+        _id: account.agentId,
+      }).populate('userId', 'name phone');
+    }
 
     // Generate unique payment & receipt numbers
     const timestamp = Date.now().toString().slice(-6);
@@ -85,9 +105,9 @@ class CollectionService {
       paymentNumber,
       receiptNumber,
       financeAccountId: account._id,
-      customerId: customer._id,
-      agentId: agent ? agent._id : account.agentId,
-      collectedById,
+      customerId: customer ? customer._id : account.customerId,
+      agentId: agent ? agent._id : (account.agentId || null),
+      collectedById: collectedById || null,
       amount: paymentAmount,
       penaltyCollected: penaltyAmount,
       totalAmount: totalCollectedForPayment,
