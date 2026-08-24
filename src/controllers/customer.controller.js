@@ -382,6 +382,27 @@ class CustomerController {
         };
       }
 
+      // Also fetch all agents working in this customer's branch
+      let branchAgents = [];
+      if (customer.branchId) {
+        const bId = customer.branchId._id || customer.branchId;
+        const bAgents = await Agent.find({
+          companyId: req.tenantId,
+          branchId: bId,
+          status: 'ACTIVE',
+        }).populate('userId', 'name phone email profileImage');
+
+        branchAgents = bAgents.map((a) => ({
+          id: a._id,
+          agentCode: a.agentCode,
+          name: a.userId?.name || 'Field Officer',
+          phone: a.userId?.phone || '',
+          email: a.userId?.email || '',
+          profileImage: a.profileImage || a.userId?.profileImage || '',
+          assignedRoutes: a.assignedRoutes || [],
+        }));
+      }
+
       return ApiResponse.success(res, 'Customer portal dashboard retrieved', {
         customer: {
           id: customer._id,
@@ -397,6 +418,7 @@ class CustomerController {
           status: customer.status,
         },
         assignedAgent,
+        branchAgents,
         branch: customer.branchId
           ? {
               id: customer.branchId._id,
