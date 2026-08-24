@@ -336,20 +336,49 @@ class CustomerController {
         .sort({ paymentDate: -1 })
         .limit(20);
 
-      // Assigned Agent details (Who will collect)
+      // Assigned Agent details (Who will collect - branch based & route based fallback)
+      const Agent = require('../models/Agent');
+      let agentDoc = customer.assignedAgentId;
+
+      if (!agentDoc && customer.address?.routeArea) {
+        agentDoc = await Agent.findOne({
+          companyId: req.tenantId,
+          assignedRoutes: { $regex: new RegExp(`^${customer.address.routeArea.trim()}$`, 'i') },
+        }).populate('userId', 'name phone email profileImage');
+      }
+
+      if (!agentDoc && customer.branchId) {
+        const bId = customer.branchId._id || customer.branchId;
+        agentDoc = await Agent.findOne({
+          companyId: req.tenantId,
+          branchId: bId,
+        }).populate('userId', 'name phone email profileImage');
+      }
+
+      if (!agentDoc && activeAccounts.length > 0 && activeAccounts[0].agentId) {
+        agentDoc = activeAccounts[0].agentId;
+      }
+
       let assignedAgent = null;
-      if (customer.assignedAgentId) {
+      if (agentDoc) {
         assignedAgent = {
-          id: customer.assignedAgentId._id,
-          agentCode: customer.assignedAgentId.agentCode,
-          name: customer.assignedAgentId.userId?.name || 'Assigned Officer',
-          phone: customer.assignedAgentId.userId?.phone || '',
-          email: customer.assignedAgentId.userId?.email || '',
-          profileImage:
-            customer.assignedAgentId.profileImage ||
-            customer.assignedAgentId.userId?.profileImage ||
-            '',
-          assignedRoutes: customer.assignedAgentId.assignedRoutes || [],
+          id: agentDoc._id,
+          agentCode: agentDoc.agentCode || 'FIELD-AGENT',
+          name: agentDoc.userId?.name || 'Branch Field Collector',
+          phone: agentDoc.userId?.phone || customer.branchId?.phone || company?.phone || '',
+          email: agentDoc.userId?.email || '',
+          profileImage: agentDoc.profileImage || agentDoc.userId?.profileImage || '',
+          assignedRoutes: agentDoc.assignedRoutes || [],
+        };
+      } else if (customer.branchId) {
+        assignedAgent = {
+          id: customer.branchId._id,
+          agentCode: customer.branchId.branchCode || 'BRANCH',
+          name: `${customer.branchId.name} Collection Desk`,
+          phone: customer.branchId.phone || company?.phone || '',
+          email: company?.email || '',
+          profileImage: '',
+          assignedRoutes: [customer.address?.routeArea || 'General Area'],
         };
       }
 
