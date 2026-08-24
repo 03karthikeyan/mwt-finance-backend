@@ -331,7 +331,12 @@ class CustomerController {
         customerId: customer._id,
         status: 'SUCCESS',
       })
-        .populate('collectedBy', 'name phone')
+        .populate({
+          path: 'agentId',
+          select: 'agentCode assignedRoutes profileImage',
+          populate: { path: 'userId', select: 'name phone email profileImage' },
+        })
+        .populate('collectedById', 'name phone email')
         .populate('financeAccountId', 'accountNumber')
         .sort({ paymentDate: -1 })
         .limit(20);
@@ -534,7 +539,12 @@ class CustomerController {
         customerId: customer._id,
       })
         .populate('financeAccountId', 'accountNumber totalPayableAmount remainingAmount')
-        .populate('collectedBy', 'name phone')
+        .populate({
+          path: 'agentId',
+          select: 'agentCode assignedRoutes profileImage',
+          populate: { path: 'userId', select: 'name phone email profileImage' },
+        })
+        .populate('collectedById', 'name phone email')
         .sort({ paymentDate: -1 });
 
       return ApiResponse.success(res, 'Customer payments retrieved', payments);
