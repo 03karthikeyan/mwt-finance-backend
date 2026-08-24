@@ -2,12 +2,13 @@ const Joi = require('joi');
 
 const loginSchema = {
   body: Joi.object({
-    email: Joi.string().email().required().messages({
-      'string.email': 'Please provide a valid email address',
-      'any.required': 'Email is required',
+    email: Joi.string().required().messages({
+      'any.required': 'Email or mobile number is required',
+      'string.empty': 'Email or mobile number is required',
     }),
     password: Joi.string().min(4).required().messages({
       'any.required': 'Password is required',
+      'string.empty': 'Password is required',
     }),
   }),
 };

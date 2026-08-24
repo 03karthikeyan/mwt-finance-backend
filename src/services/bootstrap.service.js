@@ -192,14 +192,27 @@ const autoBootstrap = async () => {
           deductChargesUpfront: true,
         });
 
-        // Customers
+        // Customers & Customer Portal User
+        const customerPassword = await bcrypt.hash('Customer@2026!', environment.bcryptSaltRounds);
+        const customerUser1 = await User.create({
+          companyId: company._id,
+          name: 'Ramesh Patel (Kirana Store)',
+          email: 'ramesh.patel@gmail.com',
+          password: customerPassword,
+          phone: '+919811122233',
+          role: ROLES.CUSTOMER,
+          branchId: branch._id,
+          status: 'ACTIVE',
+        });
+
         const customer1 = await Customer.create({
           companyId: company._id,
+          userId: customerUser1._id,
           customerCode: 'CUST-0001',
           name: 'Ramesh Patel (Kirana Store)',
           phone: '+919811122233',
           email: 'ramesh.patel@gmail.com',
-          address: { routeArea: 'Line 1 - Wholesale Market', city: 'Mumbai' },
+          address: { routeArea: 'Line 1 - Wholesale Market', city: 'Mumbai', street: 'Shop 12, Wholesale Mandi' },
           branchId: branch._id,
           assignedAgentId: agent1._id,
         });

@@ -10,6 +10,10 @@ const router = express.Router();
 router.use(authenticate, requireTenant);
 
 router.get('/portal-dashboard', CustomerController.getCustomerPortalDashboard);
+router.get('/portal-loans/:id/schedule', CustomerController.getCustomerLoanSchedule);
+router.get('/portal-payments', CustomerController.getCustomerPayments);
+router.post('/:id/login-access', CustomerController.setCustomerLoginAccess);
+
 router.get('/', CustomerController.getCustomers);
 router.post('/', validate(createCustomerSchema), CustomerController.createCustomer);
 router.get('/:id', CustomerController.getCustomerDetails);

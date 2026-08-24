@@ -256,37 +256,318 @@ class CustomerController {
    */
   static async getCustomerPortalDashboard(req, res, next) {
     try {
-      const customer = await Customer.findOne({ companyId: req.tenantId, userId: req.user.id });
+      const Company = require('../models/Company');
+      const Agent = require('../models/Agent');
+
+      let customer = await Customer.findOne({
+        companyId: req.tenantId,
+        $or: [{ userId: req.user.id }, { phone: req.user.phone }],
+      })
+        .populate({
+          path: 'assignedAgentId',
+          populate: { path: 'userId', select: 'name phone email profileImage' },
+        })
+        .populate('branchId', 'name branchCode phone address district');
+
       if (!customer) {
-        throw ApiError.notFound('Customer profile not found');
+        throw ApiError.notFound('Borrower profile not found for this account');
       }
 
-      const activeAccounts = await FinanceAccount.find({
+      // Fetch company profile for branding & contact
+      const company = await Company.findById(req.tenantId).select(
+        'name companyCode phone email supportPhone currency logo address'
+      );
+
+      // Fetch all accounts for this customer
+      const allAccounts = await FinanceAccount.find({
         companyId: req.tenantId,
         customerId: customer._id,
-        status: { $in: [FinanceStatus.ACTIVE, FinanceStatus.OVERDUE] },
-      }).populate('productId', 'name frequency');
+      })
+        .populate('productId', 'name productCode frequency calculationType')
+        .populate({
+          path: 'agentId',
+          populate: { path: 'userId', select: 'name phone profileImage' },
+        })
+        .populate('branchId', 'name branchCode phone')
+        .sort({ createdAt: -1 });
 
+      const activeAccounts = allAccounts.filter((acc) =>
+        [FinanceStatus.ACTIVE, FinanceStatus.OVERDUE].includes(acc.status)
+      );
+
+      const completedAccounts = allAccounts.filter((acc) =>
+        [FinanceStatus.COMPLETED].includes(acc.status)
+      );
+
+      // Calculate dynamic totals
+      let totalBorrowed = 0;
+      let totalPayable = 0;
+      let totalPaid = 0;
+      let totalOutstanding = 0;
+
+      allAccounts.forEach((acc) => {
+        totalBorrowed += acc.principalAmount || 0;
+        totalPayable += acc.totalPayableAmount || 0;
+        totalPaid += acc.totalPaidAmount || 0;
+        totalOutstanding += acc.remainingAmount || 0;
+      });
+
+      // Get next upcoming installment across active accounts
+      const upcomingInstallment = await Installment.findOne({
+        companyId: req.tenantId,
+        customerId: customer._id,
+        status: { $in: ['UPCOMING', 'DUE', 'OVERDUE', 'PARTIALLY_PAID'] },
+      })
+        .populate({
+          path: 'financeAccountId',
+          select: 'accountNumber frequency installmentAmount',
+          populate: { path: 'productId', select: 'name frequency' },
+        })
+        .sort({ dueDate: 1 });
+
+      // Recent Payments
       const recentPayments = await Payment.find({
         companyId: req.tenantId,
         customerId: customer._id,
         status: 'SUCCESS',
       })
+        .populate('collectedBy', 'name phone')
+        .populate('financeAccountId', 'accountNumber')
         .sort({ paymentDate: -1 })
-        .limit(10);
+        .limit(20);
 
-      // Get next upcoming installment
-      const upcomingInstallment = await Installment.findOne({
-        companyId: req.tenantId,
-        customerId: customer._id,
-        status: { $in: ['UPCOMING', 'DUE', 'OVERDUE', 'PARTIALLY_PAID'] },
-      }).sort({ dueDate: 1 });
+      // Assigned Agent details (Who will collect)
+      let assignedAgent = null;
+      if (customer.assignedAgentId) {
+        assignedAgent = {
+          id: customer.assignedAgentId._id,
+          agentCode: customer.assignedAgentId.agentCode,
+          name: customer.assignedAgentId.userId?.name || 'Assigned Officer',
+          phone: customer.assignedAgentId.userId?.phone || '',
+          email: customer.assignedAgentId.userId?.email || '',
+          profileImage:
+            customer.assignedAgentId.profileImage ||
+            customer.assignedAgentId.userId?.profileImage ||
+            '',
+          assignedRoutes: customer.assignedAgentId.assignedRoutes || [],
+        };
+      }
 
-      return ApiResponse.success(res, 'Customer portal dashboard', {
-        customer,
+      return ApiResponse.success(res, 'Customer portal dashboard retrieved', {
+        customer: {
+          id: customer._id,
+          name: customer.name,
+          customerCode: customer.customerCode,
+          phone: customer.phone,
+          alternatePhone: customer.alternatePhone,
+          email: customer.email,
+          address: customer.address,
+          guarantor: customer.guarantor,
+          creditLimit: customer.creditLimit,
+          profileImage: customer.profileImage,
+          status: customer.status,
+        },
+        assignedAgent,
+        branch: customer.branchId
+          ? {
+              id: customer.branchId._id,
+              name: customer.branchId.name,
+              branchCode: customer.branchId.branchCode,
+              phone: customer.branchId.phone,
+              address: customer.branchId.address,
+            }
+          : null,
+        company: company
+          ? {
+              id: company._id,
+              name: company.name,
+              companyCode: company.companyCode,
+              currency: company.currency,
+              logo: company.logo,
+              phone: company.phone,
+              email: company.email,
+              supportPhone: company.supportPhone || company.phone,
+              address: company.address,
+            }
+          : null,
+        summary: {
+          totalBorrowed,
+          totalPayable,
+          totalPaid,
+          totalOutstanding,
+          activeLoansCount: activeAccounts.length,
+          completedLoansCount: completedAccounts.length,
+          totalLoansCount: allAccounts.length,
+        },
         activeAccounts,
+        completedAccounts,
         upcomingInstallment,
         recentPayments,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Get Full Schedule & Ledger for a specific customer loan account
+   */
+  static async getCustomerLoanSchedule(req, res, next) {
+    try {
+      const { id } = req.params;
+
+      const customer = await Customer.findOne({
+        companyId: req.tenantId,
+        $or: [{ userId: req.user.id }, { phone: req.user.phone }],
+      });
+
+      if (!customer) {
+        throw ApiError.notFound('Customer profile not found');
+      }
+
+      const account = await FinanceAccount.findOne({
+        _id: id,
+        companyId: req.tenantId,
+        customerId: customer._id,
+      })
+        .populate('productId', 'name productCode frequency calculationType docChargePercentage interestPercentage')
+        .populate({
+          path: 'agentId',
+          populate: { path: 'userId', select: 'name phone profileImage' },
+        })
+        .populate('branchId', 'name branchCode phone address');
+
+      if (!account) {
+        throw ApiError.notFound('Loan account not found');
+      }
+
+      const schedule = await Installment.find({
+        financeAccountId: account._id,
+        companyId: req.tenantId,
+      }).sort({ installmentNumber: 1 });
+
+      const payments = await Payment.find({
+        financeAccountId: account._id,
+        companyId: req.tenantId,
+        status: 'SUCCESS',
+      })
+        .populate('collectedBy', 'name phone')
+        .sort({ paymentDate: -1 });
+
+      return ApiResponse.success(res, 'Loan account schedule and details retrieved', {
+        account,
+        schedule,
+        payments,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Get Customer Payments Ledger
+   */
+  static async getCustomerPayments(req, res, next) {
+    try {
+      const customer = await Customer.findOne({
+        companyId: req.tenantId,
+        $or: [{ userId: req.user.id }, { phone: req.user.phone }],
+      });
+
+      if (!customer) {
+        throw ApiError.notFound('Customer profile not found');
+      }
+
+      const payments = await Payment.find({
+        companyId: req.tenantId,
+        customerId: customer._id,
+      })
+        .populate('financeAccountId', 'accountNumber totalPayableAmount remainingAmount')
+        .populate('collectedBy', 'name phone')
+        .sort({ paymentDate: -1 });
+
+      return ApiResponse.success(res, 'Customer payments retrieved', payments);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Set / Reset Customer App Login Password (Admin or Agent)
+   */
+  static async setCustomerLoginAccess(req, res, next) {
+    try {
+      const { id } = req.params;
+      const { password } = req.body;
+
+      if (!password || password.length < 4) {
+        throw ApiError.badRequest('Password must be at least 4 characters long');
+      }
+
+      const customer = await Customer.findOne({ _id: id, companyId: req.tenantId });
+      if (!customer) {
+        throw ApiError.notFound('Customer not found');
+      }
+
+      const hashedPassword = await PasswordUtil.hash(password);
+      let user;
+
+      if (customer.userId) {
+        user = await User.findById(customer.userId);
+        if (user) {
+          user.password = hashedPassword;
+          user.phone = customer.phone;
+          user.name = customer.name;
+          user.status = 'ACTIVE';
+          await user.save();
+        }
+      }
+
+      if (!user) {
+        // Check if a user already exists with this phone in the company
+        user = await User.findOne({ companyId: req.tenantId, phone: customer.phone });
+        if (user) {
+          user.password = hashedPassword;
+          user.role = ROLES.CUSTOMER;
+          user.status = 'ACTIVE';
+          await user.save();
+        } else {
+          const email = customer.email && customer.email.trim().length > 0
+            ? customer.email.toLowerCase().trim()
+            : `${customer.phone.replace(/\D/g, '')}@customer.mwt`;
+
+          user = await User.create({
+            companyId: req.tenantId,
+            branchId: customer.branchId || null,
+            name: customer.name,
+            phone: customer.phone,
+            email,
+            password: hashedPassword,
+            role: ROLES.CUSTOMER,
+            status: 'ACTIVE',
+          });
+        }
+
+        customer.userId = user._id;
+        await customer.save();
+      }
+
+      await AuditService.log({
+        companyId: req.tenantId,
+        userId: req.user.id,
+        userName: req.user.name,
+        userRole: req.user.role,
+        action: 'CUSTOMER_LOGIN_CREDENTIALS_UPDATED',
+        module: 'CUSTOMERS',
+        recordId: customer._id.toString(),
+        req,
+      });
+
+      return ApiResponse.success(res, `App login credentials activated for ${customer.name}`, {
+        customerId: customer._id,
+        userId: user._id,
+        phone: customer.phone,
+        hasLoginAccess: true,
       });
     } catch (error) {
       next(error);
