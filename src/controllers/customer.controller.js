@@ -4,6 +4,8 @@ const Payment = require('../models/Payment');
 const Installment = require('../models/Installment');
 const Receipt = require('../models/Receipt');
 const User = require('../models/User');
+const Agent = require('../models/Agent');
+const Company = require('../models/Company');
 const PasswordUtil = require('../utils/passwordUtil');
 const ApiResponse = require('../utils/apiResponse');
 const ApiError = require('../utils/apiError');
@@ -35,7 +37,6 @@ class CustomerController {
 
       // If Field Agent, scope to their branch, assigned routes or direct assignments
       if (req.user.role === 'AGENT') {
-        const Agent = require('../models/Agent');
         const agentProfile = await Agent.findOne({ companyId: req.tenantId, userId: req.user.id });
         if (agentProfile) {
           const agentConds = [];
@@ -107,7 +108,6 @@ class CustomerController {
       // Auto-assign agent if creator is an AGENT
       let finalAgentId = assignedAgentId || null;
       if (req.user.role === 'AGENT' && !finalAgentId) {
-        const Agent = require('../models/Agent');
         const myAgent = await Agent.findOne({ companyId: req.tenantId, userId: req.user.id });
         if (myAgent) {
           finalAgentId = myAgent._id;
@@ -256,9 +256,6 @@ class CustomerController {
    */
   static async getCustomerPortalDashboard(req, res, next) {
     try {
-      const Company = require('../models/Company');
-      const Agent = require('../models/Agent');
-
       let customer = await Customer.findOne({
         companyId: req.tenantId,
         $or: [{ userId: req.user.id }, { phone: req.user.phone }],
@@ -342,7 +339,6 @@ class CustomerController {
         .limit(20);
 
       // Assigned Agent details (Who will collect - branch based & route based fallback)
-      const Agent = require('../models/Agent');
       let agentDoc = customer.assignedAgentId;
 
       if (!agentDoc && customer.address?.routeArea) {

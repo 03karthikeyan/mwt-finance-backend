@@ -14,6 +14,10 @@ const startServer = async () => {
     const { autoBootstrap } = require('./services/bootstrap.service');
     await autoBootstrap();
 
+    // 3. Initialize Firebase Cloud Messaging Admin SDK
+    const { initFirebase } = require('./config/firebase');
+    initFirebase();
+
     // 3. Start HTTP Server on 0.0.0.0 (all network interfaces)
     const os = require('os');
     const getLocalIpAddresses = () => {

@@ -4,6 +4,7 @@ const FinanceAccount = require('../models/FinanceAccount');
 const Installment = require('../models/Installment');
 const Customer = require('../models/Customer');
 const Agent = require('../models/Agent');
+const Payment = require('../models/Payment');
 const ApiResponse = require('../utils/apiResponse');
 const ApiError = require('../utils/apiError');
 const AuditService = require('../services/audit.service');
@@ -144,7 +145,6 @@ class CollectionController {
         .populate('productId', 'name frequency')
         .sort({ 'customerId.name': 1 });
 
-      const Payment = require('../models/Payment');
       const datePayments = await Payment.find({
         companyId: req.tenantId,
         paymentDate: { $gte: startOfDate, $lt: endOfDate },
@@ -370,7 +370,6 @@ class CollectionController {
       const tomorrow = new Date(today);
       tomorrow.setDate(tomorrow.getDate() + 1);
 
-      const Payment = require('../models/Payment');
       const query = {
         companyId: req.tenantId,
         paymentDate: { $gte: today, $lt: tomorrow },
@@ -378,7 +377,6 @@ class CollectionController {
 
       // If Field Agent, strictly show only collections collected by this agent!
       if (req.user.role === 'AGENT') {
-        const Agent = require('../models/Agent');
         const myAgent = await Agent.findOne({ companyId: req.tenantId, userId: req.user.id });
         const agentDocId = myAgent ? myAgent._id : null;
 

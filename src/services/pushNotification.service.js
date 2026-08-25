@@ -2,6 +2,8 @@ const Notification = require('../models/Notification');
 const DeviceToken = require('../models/DeviceToken');
 const User = require('../models/User');
 const { NotificationType } = require('../constants/enums');
+const { getMessaging } = require('../config/firebase');
+const logger = require('../utils/logger');
 
 class PushNotificationService {
   /**
@@ -19,24 +21,29 @@ class PushNotificationService {
   }) {
     if (!userId || !fcmToken) return null;
 
-    const tokenDoc = await DeviceToken.findOneAndUpdate(
-      { userId, fcmToken },
-      {
-        userId,
-        companyId,
-        role,
-        fcmToken,
-        platform,
-        deviceId,
-        deviceModel,
-        appVersion,
-        lastActive: new Date(),
-      },
-      { upsert: true, new: true }
-    );
+    try {
+      const tokenDoc = await DeviceToken.findOneAndUpdate(
+        { userId, fcmToken },
+        {
+          userId,
+          companyId,
+          role,
+          fcmToken,
+          platform,
+          deviceId,
+          deviceModel,
+          appVersion,
+          lastActive: new Date(),
+        },
+        { upsert: true, new: true }
+      );
 
-    console.log(`[PUSH] 📲 Device token registered for user: ${userId} (${role} on ${platform})`);
-    return tokenDoc;
+      logger.info(`[PUSH] 📲 Device token registered for user: ${userId} (${role} on ${platform})`);
+      return tokenDoc;
+    } catch (err) {
+      logger.error(`[PUSH ERROR] Failed to register device token: ${err.message}`);
+      return null;
+    }
   }
 
   /**
@@ -44,17 +51,22 @@ class PushNotificationService {
    */
   static async unregisterDeviceToken({ userId, fcmToken }) {
     if (!userId) return null;
-    if (fcmToken) {
-      await DeviceToken.deleteOne({ userId, fcmToken });
-    } else {
-      await DeviceToken.deleteMany({ userId });
+    try {
+      if (fcmToken) {
+        await DeviceToken.deleteOne({ userId, fcmToken });
+      } else {
+        await DeviceToken.deleteMany({ userId });
+      }
+      logger.info(`[PUSH] 📴 Device token removed for user: ${userId}`);
+      return true;
+    } catch (err) {
+      logger.error(`[PUSH ERROR] Failed to unregister device token: ${err.message}`);
+      return false;
     }
-    console.log(`[PUSH] 📴 Device token removed for user: ${userId}`);
-    return true;
   }
 
   /**
-   * Send Push Notification to a specific User
+   * Send Push Notification to a specific User (In-App Database + Firebase Cloud Messaging)
    */
   static async sendToUser({
     recipientId,
@@ -67,7 +79,7 @@ class PushNotificationService {
     if (!recipientId || !title || !message) return null;
 
     try {
-      // 1. Create In-App Persistent Notification Record
+      // 1. Create In-App Persistent Notification Record in MongoDB
       const notification = new Notification({
         companyId,
         recipientId,
@@ -83,39 +95,82 @@ class PushNotificationService {
       const deviceTokens = await DeviceToken.find({ userId: recipientId });
       const fcmTokens = deviceTokens.map((d) => d.fcmToken).filter(Boolean);
 
-      console.log(`[PUSH] 🔔 Notification sent to user ${recipientId} [${type}]: "${title}" (${fcmTokens.length} push devices)`);
+      logger.info(
+        `[PUSH] 🔔 Notification created for user ${recipientId} [${type}]: "${title}" (${fcmTokens.length} push devices)`
+      );
 
-      // 3. Dispatch to Firebase Cloud Messaging (if Firebase is configured)
-      if (global.firebaseMessaging && fcmTokens.length > 0) {
+      // 3. Dispatch to Firebase Cloud Messaging (if Firebase is configured and devices exist)
+      const messaging = getMessaging();
+      if (messaging && fcmTokens.length > 0) {
         try {
-          const response = await global.firebaseMessaging.sendEachForMulticast({
+          const stringifiedData = Object.fromEntries(
+            Object.entries(data || {}).map(([k, v]) => [
+              k,
+              typeof v === 'string' ? v : JSON.stringify(v),
+            ])
+          );
+          stringifiedData.notificationId = notification._id.toString();
+          stringifiedData.type = type.toString();
+          stringifiedData.title = title;
+          stringifiedData.body = message;
+
+          const response = await messaging.sendEachForMulticast({
             tokens: fcmTokens,
-            notification: { title, body: message },
-            data: {
-              ...Object.fromEntries(
-                Object.entries(data).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)])
-              ),
-              notificationId: notification._id.toString(),
-              type: type.toString(),
+            notification: {
+              title,
+              body: message,
+            },
+            data: stringifiedData,
+            android: {
+              priority: 'high',
+              notification: {
+                channelId: 'finance_alerts_channel',
+                sound: 'default',
+                priority: 'max',
+                visibility: 'public',
+                defaultSound: true,
+                defaultVibrateTimings: true,
+                icon: 'ic_launcher',
+              },
+            },
+            apns: {
+              payload: {
+                aps: {
+                  sound: 'default',
+                  badge: 1,
+                  contentAvailable: true,
+                },
+              },
             },
           });
+
+          logger.info(
+            `[PUSH] 🚀 FCM Multicast sent: ${response.successCount} success, ${response.failureCount} failed`
+          );
 
           // Clean up invalid / unregistered tokens
           if (response.failureCount > 0) {
             response.responses.forEach((resp, idx) => {
-              if (!resp.success && resp.error?.code === 'messaging/registration-token-not-registered') {
-                DeviceToken.deleteOne({ fcmToken: fcmTokens[idx] }).exec();
+              if (!resp.success && resp.error) {
+                const errorCode = resp.error.code;
+                if (
+                  errorCode === 'messaging/registration-token-not-registered' ||
+                  errorCode === 'messaging/invalid-registration-token'
+                ) {
+                  DeviceToken.deleteOne({ fcmToken: fcmTokens[idx] }).exec();
+                  logger.warn(`[PUSH] 🗑️ Cleaned up invalid FCM token: ${fcmTokens[idx]}`);
+                }
               }
             });
           }
         } catch (fcmErr) {
-          console.warn('[PUSH] FCM dispatch warning:', fcmErr.message);
+          logger.warn(`[PUSH] FCM dispatch warning: ${fcmErr.message}`);
         }
       }
 
       return notification;
     } catch (err) {
-      console.error('[PUSH ERROR] Failed to send push notification:', err);
+      logger.error(`[PUSH ERROR] Failed to send push notification: ${err.message}`);
       return null;
     }
   }
@@ -149,13 +204,13 @@ class PushNotificationService {
       );
       return results;
     } catch (err) {
-      console.error('[PUSH ERROR] Failed to send to role:', err);
+      logger.error(`[PUSH ERROR] Failed to send to role: ${err.message}`);
       return [];
     }
   }
 
   /**
-   * Event Trigger: Instant Collection Alert to Company Admins
+   * Event Trigger: Instant Collection Alert to Company Admins and Branch Managers
    */
   static async notifyPaymentCollected({
     companyId,
@@ -166,7 +221,7 @@ class PushNotificationService {
     accountNumber,
   }) {
     const title = `💰 Collection Received: ₹${amount}`;
-    const message = `${collectorName} collected ₹${amount} from ${customerName} (${receiptNo})`;
+    const message = `${collectorName} collected ₹${amount} from ${customerName} (${receiptNo || 'Receipt'})`;
 
     return this.sendToRole({
       companyId,
@@ -207,10 +262,65 @@ class PushNotificationService {
       data: {
         accountNumber: accountNumber || '',
         customerName: customerName || '',
-        principalAmount: principalAmount.toString(),
+        principalAmount: principalAmount ? principalAmount.toString() : '0',
+        installmentAmount: installmentAmount ? installmentAmount.toString() : '0',
         event: 'LOAN_DISBURSED',
       },
     });
+  }
+
+  /**
+   * Event Trigger: Overdue Account Alert
+   */
+  static async notifyAccountOverdue({
+    companyId,
+    agentUserId,
+    customerName,
+    accountNumber,
+    overdueDays,
+    pendingAmount,
+  }) {
+    const title = `⚠️ Overdue Alert: ${customerName} (${overdueDays} Days)`;
+    const message = `Account ${accountNumber} is ${overdueDays} days overdue. Pending balance: ₹${pendingAmount}`;
+
+    const promises = [];
+    if (agentUserId) {
+      promises.push(
+        this.sendToUser({
+          recipientId: agentUserId,
+          companyId,
+          title,
+          message,
+          type: NotificationType.OVERDUE,
+          data: {
+            accountNumber: accountNumber || '',
+            customerName: customerName || '',
+            overdueDays: overdueDays ? overdueDays.toString() : '0',
+            pendingAmount: pendingAmount ? pendingAmount.toString() : '0',
+            event: 'ACCOUNT_OVERDUE',
+          },
+        })
+      );
+    }
+
+    promises.push(
+      this.sendToRole({
+        companyId,
+        role: 'COMPANY_ADMIN',
+        title,
+        message,
+        type: NotificationType.OVERDUE,
+        data: {
+          accountNumber: accountNumber || '',
+          customerName: customerName || '',
+          overdueDays: overdueDays ? overdueDays.toString() : '0',
+          pendingAmount: pendingAmount ? pendingAmount.toString() : '0',
+          event: 'ACCOUNT_OVERDUE',
+        },
+      })
+    );
+
+    return Promise.all(promises);
   }
 }
 

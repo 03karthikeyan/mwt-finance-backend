@@ -1,4 +1,5 @@
 const FinanceProduct = require('../models/FinanceProduct');
+const FinanceAccount = require('../models/FinanceAccount');
 const ApiResponse = require('../utils/apiResponse');
 const ApiError = require('../utils/apiError');
 const AuditService = require('../services/audit.service');
@@ -79,7 +80,6 @@ class FinanceProductController {
   static async deleteProduct(req, res, next) {
     try {
       const { id } = req.params;
-      const FinanceAccount = require('../models/FinanceAccount');
       const activeCount = await FinanceAccount.countDocuments({
         productId: id,
         companyId: req.tenantId,
