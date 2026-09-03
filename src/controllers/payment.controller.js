@@ -1,8 +1,12 @@
 const Payment = require('../models/Payment');
 const PaymentAllocation = require('../models/PaymentAllocation');
 const Receipt = require('../models/Receipt');
+const FinanceAccount = require('../models/FinanceAccount');
+const Installment = require('../models/Installment');
+const Customer = require('../models/Customer');
 const ApiResponse = require('../utils/apiResponse');
 const ApiError = require('../utils/apiError');
+const auditService = require('../services/audit.service');
 
 class PaymentController {
   /**
@@ -92,6 +96,70 @@ class PaymentController {
         allocations,
         receipt,
       });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Reversal / Correction of a Payment (Admin/Manager with audit trail)
+   */
+  static async reversePayment(req, res, next) {
+    try {
+      const { id } = req.params;
+      const { reversalReason } = req.body;
+
+      if (!reversalReason) {
+        throw ApiError.badRequest('Reversal reason is required');
+      }
+
+      const payment = await Payment.findOne({ _id: id, companyId: req.tenantId });
+      if (!payment) {
+        throw ApiError.notFound('Payment record not found');
+      }
+
+      if (payment.status === 'REVERSED') {
+        throw ApiError.badRequest('Payment has already been reversed');
+      }
+
+      payment.status = 'REVERSED';
+      payment.notes = `REVERSED: ${reversalReason} (By ${req.user.name})`;
+      await payment.save();
+
+      // Restore account balance
+      const account = await FinanceAccount.findById(payment.financeAccountId);
+      if (account) {
+        account.totalPaidAmount = Math.max(0, account.totalPaidAmount - payment.amount);
+        account.remainingAmount = account.remainingAmount + payment.amount;
+        if (account.paidInstallments > 0) {
+          account.paidInstallments = account.paidInstallments - 1;
+        }
+        if (account.status === 'COMPLETED') {
+          account.status = 'ACTIVE';
+        }
+        await account.save();
+      }
+
+      // Restore customer balance
+      const customer = await Customer.findById(payment.customerId);
+      if (customer) {
+        customer.totalPaidAmount = Math.max(0, customer.totalPaidAmount - payment.amount);
+        customer.totalOutstandingAmount = customer.totalOutstandingAmount + payment.amount;
+        await customer.save();
+      }
+
+      // Mark receipt invalid
+      await Receipt.updateOne({ paymentId: payment._id }, { status: 'CANCELLED' });
+
+      await auditService.logAction({
+        req,
+        action: 'PAYMENT_REVERSED',
+        entity: 'Payment',
+        entityId: payment._id,
+        details: { amount: payment.amount, reversalReason, receiptNumber: payment.receiptNumber },
+      });
+
+      return ApiResponse.success(res, 'Payment reversed successfully', { payment });
     } catch (error) {
       next(error);
     }

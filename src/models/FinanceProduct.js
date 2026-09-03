@@ -33,8 +33,14 @@ const financeProductSchema = new mongoose.Schema(
     },
     calculationType: {
       type: String,
-      enum: ['FLAT_INTEREST', 'DOCUMENTATION_FEE_DEDUCTION', 'REDUCING_BALANCE', 'FIXED_INSTALLMENT'],
+      enum: ['FLAT_INTEREST', 'DOCUMENTATION_FEE_DEDUCTION', 'REDUCING_BALANCE', 'FIXED_INSTALLMENT', 'INTEREST_ONLY'],
       default: 'DOCUMENTATION_FEE_DEDUCTION',
+    },
+    productCategory: {
+      type: String,
+      enum: ['DAILY', 'WEEKLY', 'MONTHLY_EMI', 'MONTHLY_INTEREST', 'GOLD_LOAN', 'VEHICLE_FINANCE', 'ENTERPRISE_LOAN', 'PRODUCT_FINANCE'],
+      default: 'DAILY',
+      index: true,
     },
     minAmount: {
       type: Number,

@@ -83,6 +83,27 @@ const customerSchema = new mongoose.Schema(
       default: 'ACTIVE',
       index: true,
     },
+    kycStatus: {
+      type: String,
+      enum: ['PENDING', 'SUBMITTED', 'UNDER_REVIEW', 'VERIFIED', 'REJECTED'],
+      default: 'PENDING',
+      index: true,
+    },
+    kycVerification: {
+      verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      verifiedAt: { type: Date },
+      rejectionReason: { type: String, default: '' },
+    },
+    referee: {
+      name: { type: String, default: '' },
+      phone: { type: String, default: '' },
+      relation: { type: String, default: '' },
+    },
+    nominee: {
+      name: { type: String, default: '' },
+      phone: { type: String, default: '' },
+      relation: { type: String, default: '' },
+    },
     creditLimit: {
       type: Number,
       default: 100000,

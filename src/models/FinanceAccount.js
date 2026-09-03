@@ -120,6 +120,38 @@ const financeAccountSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
     },
+    isInterestOnly: {
+      type: Boolean,
+      default: false,
+    },
+    goldDetails: {
+      weightGrams: { type: Number, default: 0 },
+      purity: { type: String, default: '' },
+      appraisedValue: { type: Number, default: 0 },
+      itemDescription: { type: String, default: '' },
+      pledgeNumber: { type: String, default: '' },
+      releasedDate: { type: Date },
+    },
+    vehicleDetails: {
+      regNumber: { type: String, default: '' },
+      vehicleType: { type: String, default: '' },
+      modelName: { type: String, default: '' },
+      engineNumber: { type: String, default: '' },
+      chassisNumber: { type: String, default: '' },
+    },
+    productDetails: {
+      itemCategory: { type: String, default: '' },
+      itemName: { type: String, default: '' },
+      modelNo: { type: String, default: '' },
+      serialNo: { type: String, default: '' },
+    },
+    foreclosureDetails: {
+      closedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      closureReceiptNo: { type: String, default: '' },
+      rebateAmount: { type: Number, default: 0 },
+      finalCollectedAmount: { type: Number, default: 0 },
+      closureReason: { type: String, default: '' },
+    },
     closedDate: {
       type: Date,
     },

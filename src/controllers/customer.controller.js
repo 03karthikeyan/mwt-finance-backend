@@ -1,5 +1,6 @@
 const Customer = require('../models/Customer');
 const FinanceAccount = require('../models/FinanceAccount');
+const FinanceProduct = require('../models/FinanceProduct');
 const Payment = require('../models/Payment');
 const Installment = require('../models/Installment');
 const Receipt = require('../models/Receipt');
@@ -10,6 +11,7 @@ const PasswordUtil = require('../utils/passwordUtil');
 const ApiResponse = require('../utils/apiResponse');
 const ApiError = require('../utils/apiError');
 const AuditService = require('../services/audit.service');
+const FinanceCalculatorService = require('../services/financeCalculator.service');
 const { ROLES } = require('../config/roles');
 const { FinanceStatus } = require('../constants/enums');
 
@@ -97,6 +99,10 @@ class CustomerController {
         notes = '',
         createLoginAccount = false,
         loginPassword,
+        // Optional: auto-disburse loan when registering borrower
+        loanProductId,
+        loanPrincipalAmount,
+        loanStartDate,
       } = req.body;
 
       // Check existing phone within company
@@ -169,7 +175,108 @@ class CustomerController {
         req,
       });
 
-      return ApiResponse.created(res, 'Customer registered successfully', customer);
+      // ─── Optional: Auto-Disburse Loan at Registration ───────────────────────
+      let loanAccount = null;
+      if (loanProductId && loanPrincipalAmount && Number(loanPrincipalAmount) > 0) {
+        try {
+          // Verify product
+          const product = await FinanceProduct.findOne({ _id: loanProductId, companyId: req.tenantId, status: 'ACTIVE' });
+          if (product) {
+            // Resolve agent
+            let selectedAgentId = finalAgentId;
+            if (!selectedAgentId) {
+              const defaultAgent = await Agent.findOne({ companyId: req.tenantId, status: 'ACTIVE' });
+              if (defaultAgent) selectedAgentId = defaultAgent._id;
+            }
+
+            if (selectedAgentId) {
+              // Calculate finance schedule
+              const calc = FinanceCalculatorService.calculateFinance({
+                principalAmount: Number(loanPrincipalAmount),
+                product,
+                frequency: product.frequency,
+                startDate: loanStartDate ? new Date(loanStartDate) : new Date(),
+              });
+
+              // Generate account number
+              const accCount = await FinanceAccount.countDocuments({ companyId: req.tenantId });
+              const year = new Date().getFullYear();
+              const accountNumber = `FIN-${year}-${(accCount + 1).toString().padStart(5, '0')}`;
+
+              // Create Finance Account
+              loanAccount = new FinanceAccount({
+                companyId: req.tenantId,
+                branchId: branchId || customer.branchId || null,
+                accountNumber,
+                customerId: customer._id,
+                agentId: selectedAgentId,
+                productId: product._id,
+                frequency: calc.frequency,
+                principalAmount: calc.principalAmount,
+                interestAmount: calc.interestAmount,
+                docChargeAmount: calc.docChargeAmount,
+                netDisbursedAmount: calc.netDisbursedAmount,
+                totalPayableAmount: calc.totalPayableAmount,
+                installmentAmount: calc.installmentAmount,
+                totalInstallments: calc.totalInstallments,
+                paidInstallments: 0,
+                totalPaidAmount: 0,
+                remainingAmount: calc.totalPayableAmount,
+                startDate: calc.startDate,
+                endDate: calc.endDate,
+                nextDueDate: calc.nextDueDate,
+                status: FinanceStatus.ACTIVE,
+                disbursedBy: req.user.id,
+                notes: `Auto-disbursed at registration for ${name}`,
+              });
+              await loanAccount.save();
+
+              // Save installment schedule
+              const installmentDocs = calc.schedule.map((s) => ({
+                ...s,
+                companyId: req.tenantId,
+                financeAccountId: loanAccount._id,
+                customerId: customer._id,
+              }));
+              await Installment.insertMany(installmentDocs);
+
+              // Update customer totals
+              customer.totalActiveLoans = (customer.totalActiveLoans || 0) + 1;
+              customer.totalOutstandingAmount = (customer.totalOutstandingAmount || 0) + calc.totalPayableAmount;
+              if (!customer.assignedAgentId) customer.assignedAgentId = selectedAgentId;
+              await customer.save();
+
+              await AuditService.log({
+                companyId: req.tenantId,
+                userId: req.user.id,
+                userName: req.user.name,
+                userRole: req.user.role,
+                action: 'LOAN_DISBURSED',
+                module: 'FINANCE_ACCOUNTS',
+                recordId: loanAccount._id.toString(),
+                req,
+                metadata: {
+                  accountNumber,
+                  customerName: name,
+                  principalAmount: calc.principalAmount,
+                  netDisbursedAmount: calc.netDisbursedAmount,
+                  autoDisburseAtRegistration: true,
+                },
+              });
+            }
+          }
+        } catch (loanErr) {
+          // Loan disbursement failure should not roll back customer creation
+          console.warn('[AUTO-LOAN WARN] Failed to auto-disburse loan at registration:', loanErr.message);
+        }
+      }
+      // ────────────────────────────────────────────────────────────────────────
+
+      return ApiResponse.created(res, loanAccount
+        ? `Borrower registered and loan of ₹${loanPrincipalAmount} disbursed successfully`
+        : 'Customer registered successfully',
+        { customer, loanAccount }
+      );
     } catch (error) {
       next(error);
     }

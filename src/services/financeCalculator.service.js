@@ -19,14 +19,38 @@ class FinanceCalculatorService {
     const freq = frequency || product.frequency || CollectionFrequency.DAILY;
     const totalInstallments = Number(customInstallments || product.defaultInstallments || 100);
 
-    // Interest Calculation
     const interestRate = customInterestPercentage !== undefined 
       ? Number(customInterestPercentage) 
       : Number(product.interestPercentage || 0);
 
     let interestAmount = 0;
-    if (product.calculationType === 'FLAT_INTEREST') {
+    let installmentAmount = 0;
+    const calcType = product.calculationType || 'FLAT_INTEREST';
+
+    if (calcType === 'FLAT_INTEREST' || calcType === 'DOCUMENTATION_FEE_DEDUCTION') {
       interestAmount = Math.round((principal * interestRate) / 100);
+      const totalPayable = principal + interestAmount;
+      installmentAmount = Math.round(totalPayable / totalInstallments);
+    } else if (calcType === 'REDUCING_BALANCE') {
+      // Monthly reducing EMI formula: EMI = P * r * (1+r)^n / ((1+r)^n - 1)
+      const monthlyRate = (interestRate / 12) / 100;
+      if (monthlyRate > 0) {
+        const emi = (principal * monthlyRate * Math.pow(1 + monthlyRate, totalInstallments)) /
+                    (Math.pow(1 + monthlyRate, totalInstallments) - 1);
+        installmentAmount = Math.round(emi);
+        interestAmount = (installmentAmount * totalInstallments) - principal;
+      } else {
+        installmentAmount = Math.round(principal / totalInstallments);
+        interestAmount = 0;
+      }
+    } else if (calcType === 'INTEREST_ONLY') {
+      // Interest servicing only per period, principal due on last installment
+      const periodicInterest = Math.round((principal * interestRate) / 100);
+      installmentAmount = periodicInterest;
+      interestAmount = periodicInterest * totalInstallments;
+    } else {
+      installmentAmount = Math.round(principal / totalInstallments);
+      interestAmount = 0;
     }
 
     // Documentation / Processing Fee
@@ -41,12 +65,12 @@ class FinanceCalculatorService {
     const docChargeAmount = Math.round((principal * docPercent) / 100) + docFixed;
 
     // Net Disbursed vs Total Payable
-    const totalPayableAmount = principal + interestAmount;
+    const totalPayableAmount = calcType === 'INTEREST_ONLY' 
+      ? (principal + interestAmount)
+      : (principal + interestAmount);
+    
     const deductUpfront = product.deductChargesUpfront !== false;
     const netDisbursedAmount = deductUpfront ? (principal - docChargeAmount) : principal;
-
-    // Per-Installment Amount
-    const installmentAmount = Math.round(totalPayableAmount / totalInstallments);
 
     // Generate Installment Schedule Dates
     const schedule = [];
@@ -56,7 +80,6 @@ class FinanceCalculatorService {
       if (freq === CollectionFrequency.DAILY) {
         currentDate.setDate(currentDate.getDate() + 1);
         if (excludeSundays && currentDate.getDay() === 0) {
-          // If Sunday, skip to Monday
           currentDate.setDate(currentDate.getDate() + 1);
         }
       } else if (freq === CollectionFrequency.WEEKLY) {
@@ -64,14 +87,18 @@ class FinanceCalculatorService {
       } else if (freq === CollectionFrequency.MONTHLY) {
         currentDate.setMonth(currentDate.getMonth() + 1);
       } else {
-        // Custom default 1 day
         currentDate.setDate(currentDate.getDate() + 1);
       }
 
-      // Handle last installment rounding difference
-      const currentExpected = (i === totalInstallments)
-        ? (totalPayableAmount - (installmentAmount * (totalInstallments - 1)))
-        : installmentAmount;
+      let currentExpected = installmentAmount;
+      if (calcType === 'INTEREST_ONLY' && i === totalInstallments) {
+        // Last installment includes principal payback
+        currentExpected = installmentAmount + principal;
+      } else if (i === totalInstallments && calcType !== 'INTEREST_ONLY') {
+        // Rounding adjustment for last installment
+        const previousTotal = installmentAmount * (totalInstallments - 1);
+        currentExpected = totalPayableAmount - previousTotal;
+      }
 
       schedule.push({
         installmentNumber: i,
@@ -100,6 +127,22 @@ class FinanceCalculatorService {
       endDate,
       nextDueDate,
       schedule,
+    };
+  }
+
+  /**
+   * Calculate foreclosure / early loan settlement details
+   */
+  static calculateForeclosure({ account, rebatePercentage = 0 }) {
+    const remainingAmount = account.remainingAmount || 0;
+    const rebateAmount = Math.round((remainingAmount * Number(rebatePercentage)) / 100);
+    const finalSettlementAmount = Math.max(0, remainingAmount - rebateAmount);
+
+    return {
+      outstandingAmount: remainingAmount,
+      rebatePercentage: Number(rebatePercentage),
+      rebateAmount,
+      finalSettlementAmount,
     };
   }
 }

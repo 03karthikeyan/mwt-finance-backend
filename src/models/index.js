@@ -2,6 +2,10 @@ const SuperAdmin = require('./SuperAdmin');
 const Company = require('./Company');
 const SubscriptionPlan = require('./SubscriptionPlan');
 const Subscription = require('./Subscription');
+const License = require('./License');
+const Expense = require('./Expense');
+const Investment = require('./Investment');
+const DayClosing = require('./DayClosing');
 const User = require('./User');
 const Branch = require('./Branch');
 const Agent = require('./Agent');
@@ -26,6 +30,10 @@ module.exports = {
   Company,
   SubscriptionPlan,
   Subscription,
+  License,
+  Expense,
+  Investment,
+  DayClosing,
   User,
   Branch,
   Agent,
