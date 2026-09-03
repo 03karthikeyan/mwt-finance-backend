@@ -112,6 +112,26 @@ class AuthController {
       next(error);
     }
   }
+
+  static async setMpin(req, res, next) {
+    try {
+      const { mpin } = req.body;
+      const result = await AuthService.setMpin(req.user.id, mpin);
+      return ApiResponse.success(res, result.message);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async loginWithMpin(req, res, next) {
+    try {
+      const { phone, mpin } = req.body;
+      const result = await AuthService.loginWithMpin(phone, mpin);
+      return ApiResponse.success(res, 'MPIN Login successful', result);
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 module.exports = AuthController;

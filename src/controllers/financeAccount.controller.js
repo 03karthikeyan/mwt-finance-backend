@@ -202,6 +202,10 @@ class FinanceAccountController {
         nextDueDate: calc.nextDueDate,
         status: FinanceStatus.ACTIVE,
         disbursedBy: req.user.id,
+        isInterestOnly: product.calculationType === 'INTEREST_ONLY',
+        goldDetails: req.body.goldDetails || {},
+        vehicleDetails: req.body.vehicleDetails || {},
+        productDetails: req.body.productDetails || {},
         notes,
       });
       await account.save();

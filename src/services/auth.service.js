@@ -449,6 +449,81 @@ class AuthService {
       message: 'Password has been reset successfully! You can now log in.',
     };
   }
+
+  static async setMpin(userId, mpin) {
+    if (!mpin || mpin.length !== 4) {
+      throw ApiError.badRequest('MPIN must be a 4-digit numeric code');
+    }
+    const user = await User.findById(userId);
+    if (!user) {
+      throw ApiError.notFound('User account not found');
+    }
+
+    user.mpin = await PasswordUtil.hash(mpin);
+    await user.save();
+
+    return { success: true, message: '4-Digit MPIN updated successfully' };
+  }
+
+  static async loginWithMpin(phone, mpin) {
+    if (!phone || !mpin) {
+      throw ApiError.badRequest('Mobile number and 4-digit MPIN are required');
+    }
+
+    const cleanPhoneDigits = phone.trim().replace(/\D/g, '');
+    const user = await User.findOne({
+      $or: [
+        { phone: phone.trim() },
+        { phone: `+91${cleanPhoneDigits}` },
+        { phone: cleanPhoneDigits.length === 10 ? cleanPhoneDigits : cleanPhoneDigits.slice(-10) },
+      ],
+    }).select('+mpin +password');
+
+    if (!user || !user.mpin) {
+      throw ApiError.unauthorized('Invalid phone number or MPIN not configured');
+    }
+
+    const isMatch = await PasswordUtil.compare(mpin, user.mpin);
+    if (!isMatch) {
+      throw ApiError.unauthorized('Incorrect 4-digit MPIN');
+    }
+
+    if (user.status !== UserStatus.ACTIVE) {
+      throw ApiError.forbidden(`Your account is ${user.status.toLowerCase()}`);
+    }
+
+    user.lastLogin = new Date();
+    await user.save();
+
+    const company = await Company.findById(user.companyId);
+    const tokenPayload = {
+      id: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      role: user.role,
+      companyId: user.companyId ? user.companyId.toString() : null,
+      branchId: user.branchId ? user.branchId.toString() : null,
+    };
+
+    const accessToken = JwtUtil.generateAccessToken(tokenPayload);
+    const refreshToken = JwtUtil.generateRefreshToken(tokenPayload);
+
+    return {
+      user: {
+        id: user._id.toString(),
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        companyId: user.companyId,
+        branchId: user.branchId,
+        profileImage: user.profileImage || '',
+      },
+      tokens: { accessToken, refreshToken },
+      companyName: company ? company.name : '',
+    };
+  }
 }
 
 module.exports = AuthService;

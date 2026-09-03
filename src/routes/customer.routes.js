@@ -18,6 +18,7 @@ router.get('/', CustomerController.getCustomers);
 router.post('/', validate(createCustomerSchema), CustomerController.createCustomer);
 router.get('/:id', CustomerController.getCustomerDetails);
 router.put('/:id', validate(updateCustomerSchema), CustomerController.updateCustomer);
+router.patch('/:id/kyc-status', CustomerController.updateKycStatus);
 router.delete('/:id', CustomerController.deleteCustomer);
 
 module.exports = router;

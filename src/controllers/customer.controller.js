@@ -777,6 +777,46 @@ class CustomerController {
       next(error);
     }
   }
+
+  static async updateKycStatus(req, res, next) {
+    try {
+      const { id } = req.params;
+      const { kycStatus, rejectionReason } = req.body;
+
+      if (!['PENDING', 'SUBMITTED', 'UNDER_REVIEW', 'VERIFIED', 'REJECTED'].includes(kycStatus)) {
+        throw ApiError.badRequest('Invalid KYC Status');
+      }
+
+      const customer = await Customer.findOne({ _id: id, companyId: req.tenantId });
+      if (!customer) {
+        throw ApiError.notFound('Borrower profile not found');
+      }
+
+      customer.kycStatus = kycStatus;
+      customer.kycVerification = {
+        verifiedBy: req.user.id,
+        verifiedAt: new Date(),
+        rejectionReason: rejectionReason || '',
+      };
+
+      await customer.save();
+
+      await AuditService.log({
+        companyId: req.tenantId,
+        userId: req.user.id,
+        userName: req.user.name,
+        userRole: req.user.role,
+        action: `KYC_${kycStatus}`,
+        module: 'CUSTOMERS',
+        recordId: customer._id.toString(),
+        req,
+      });
+
+      return ApiResponse.success(res, `KYC Status updated to ${kycStatus}`, { customer });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 module.exports = CustomerController;

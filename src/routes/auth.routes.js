@@ -20,6 +20,8 @@ router.post('/forgot-password', authLimiter, validate(forgotPasswordSchema), Aut
 router.post('/verify-reset-otp', authLimiter, validate(verifyResetOtpSchema), AuthController.verifyResetOtp);
 router.post('/reset-password', authLimiter, validate(resetPasswordSchema), AuthController.resetPassword);
 router.post('/change-password', authenticate, validate(changePasswordSchema), AuthController.changePassword);
+router.post('/set-mpin', authenticate, AuthController.setMpin);
+router.post('/login-mpin', authLimiter, AuthController.loginWithMpin);
 router.get('/profile', authenticate, AuthController.getProfile);
 
 module.exports = router;
