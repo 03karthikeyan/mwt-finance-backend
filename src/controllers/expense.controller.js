@@ -137,6 +137,11 @@ class ExpenseController {
         expenseQuery.branchId = branchId;
       }
 
+      if (req.user && req.user.role === 'AGENT') {
+        paymentQuery.collectedBy = req.user.id || req.user._id;
+        expenseQuery.createdBy = req.user.id || req.user._id;
+      }
+
       // Aggregate collections
       const payments = await Payment.aggregate([
         { $match: paymentQuery },

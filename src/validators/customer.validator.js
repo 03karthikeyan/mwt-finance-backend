@@ -29,7 +29,12 @@ const createCustomerSchema = {
     }).optional(),
     creditLimit: Joi.number().min(0).optional(),
     notes: Joi.string().allow('').optional(),
-  }),
+    createLoginAccount: Joi.boolean().optional(),
+    loginPassword: Joi.string().allow('').optional(),
+    loanProductId: Joi.string().allow('').optional(),
+    loanPrincipalAmount: Joi.number().min(0).optional(),
+    loanStartDate: Joi.date().optional(),
+  }).unknown(true),
 };
 
 const updateCustomerSchema = {
@@ -46,7 +51,7 @@ const updateCustomerSchema = {
     status: Joi.string().valid('ACTIVE', 'INACTIVE', 'BLOCKED').optional(),
     creditLimit: Joi.number().min(0).optional(),
     notes: Joi.string().allow('').optional(),
-  }),
+  }).unknown(true),
 };
 
 module.exports = {
