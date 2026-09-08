@@ -166,8 +166,6 @@ class CollectionController {
         const accIdStr = acc._id.toString();
         const accPayments = paymentsByAccountId[accIdStr] || [];
         const todayPaidAmount = accPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
-        const isPaidToday = todayPaidAmount >= (acc.installmentAmount || 0) && todayPaidAmount > 0;
-        const isPartialPaidToday = todayPaidAmount > 0 && todayPaidAmount < (acc.installmentAmount || 0);
 
         const lastP = accPayments.length > 0 ? accPayments[accPayments.length - 1] : null;
 
@@ -186,7 +184,46 @@ class CollectionController {
           };
         }
 
-        const isOverdue = acc.nextDueDate && new Date(acc.nextDueDate) < startOfDate;
+        // Calculate schedule & overdue metrics up to target date
+        const totalInst = acc.totalInstallments || 100;
+        const instAmount = acc.installmentAmount || 0;
+        const paidCount = acc.paidInstallments || 0;
+        const startDate = acc.startDate ? new Date(acc.startDate) : new Date();
+        const freq = acc.frequency || 'DAILY';
+
+        let scheduledUpToYesterday = 0;
+        let scheduledUpToToday = 0;
+        let currD = new Date(startDate);
+
+        for (let i = 1; i <= totalInst; i++) {
+          if (freq === 'WEEKLY') {
+            currD.setDate(currD.getDate() + 7);
+          } else if (freq === 'MONTHLY') {
+            currD.setMonth(currD.getMonth() + 1);
+          } else {
+            currD.setDate(currD.getDate() + 1);
+          }
+
+          if (currD < startOfDate) {
+            scheduledUpToYesterday = i;
+          }
+          if (currD <= endOfDate) {
+            scheduledUpToToday = i;
+          } else {
+            break;
+          }
+        }
+
+        const overdueCount = Math.max(0, scheduledUpToYesterday - paidCount);
+        const overdueAmount = overdueCount * instAmount;
+        const totalScheduledDueUpToToday = Math.max(0, scheduledUpToToday - paidCount) * instAmount;
+
+        // Remaining pending amount to collect for today & overdue
+        const remainingPendingDue = Math.max(0, totalScheduledDueUpToToday - todayPaidAmount);
+        const isFullyPaidUpToDate = remainingPendingDue <= 0 && totalScheduledDueUpToToday > 0;
+        const isPaidToday = todayPaidAmount >= instAmount && overdueCount === 0;
+        const isPartialPaidToday = todayPaidAmount > 0 && remainingPendingDue > 0;
+        const isOverdue = overdueCount > 0 || (acc.nextDueDate && new Date(acc.nextDueDate) < startOfDate);
 
         return {
           accountId: acc._id,
@@ -196,10 +233,17 @@ class CollectionController {
           productName: acc.productId ? acc.productId.name : '',
           frequency: acc.frequency,
           installmentAmount: acc.installmentAmount,
+          totalInstallments: acc.totalInstallments,
+          paidInstallments: acc.paidInstallments,
           remainingAmount: acc.remainingAmount,
           startDate: acc.startDate,
           nextDueDate: acc.nextDueDate,
           isOverdue,
+          overdueCount,
+          overdueAmount,
+          totalScheduledDueUpToToday,
+          remainingPendingDue,
+          isFullyPaidUpToDate,
           status: acc.status,
           // Today's / Selected Date Status Details
           isPaidToday,
