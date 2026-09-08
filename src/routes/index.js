@@ -17,6 +17,7 @@ const licenseRoutes = require('./license.routes');
 const expenseRoutes = require('./expense.routes');
 const investmentRoutes = require('./investment.routes');
 const dayClosingRoutes = require('./dayClosing.routes');
+const staffLedgerRoutes = require('./staffLedger.routes');
 
 const router = express.Router();
 
@@ -47,6 +48,7 @@ router.get('/', (req, res) => {
       expenses: `${req.baseUrl}/expenses`,
       investments: `${req.baseUrl}/investments`,
       dayClosing: `${req.baseUrl}/day-closing`,
+      staffLedger: `${req.baseUrl}/staff-ledger`,
     },
   });
 });
@@ -80,5 +82,6 @@ router.use('/license', licenseRoutes);
 router.use('/expenses', expenseRoutes);
 router.use('/investments', investmentRoutes);
 router.use('/day-closing', dayClosingRoutes);
+router.use('/staff-ledger', staffLedgerRoutes);
 
 module.exports = router;

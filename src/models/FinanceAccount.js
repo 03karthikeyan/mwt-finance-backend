@@ -155,6 +155,13 @@ const financeAccountSchema = new mongoose.Schema(
     closedDate: {
       type: Date,
     },
+    collateral: {
+      type: { type: String, enum: ['GOLD', 'VEHICLE', 'PROPERTY', 'CHEQUE', 'NONE'], default: 'NONE' },
+      description: { type: String, default: '' },
+      weightGrams: { type: Number, default: 0 },
+      estimatedValue: { type: Number, default: 0 },
+      proofDocUrl: { type: String, default: '' },
+    },
     notes: {
       type: String,
       default: '',

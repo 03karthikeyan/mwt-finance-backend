@@ -11,47 +11,12 @@ const expenseSchema = new mongoose.Schema(
     branchId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Branch',
+      default: null,
       index: true,
     },
     agentId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Agent',
-      index: true,
-    },
-    title: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-    category: {
-      type: String,
-      enum: ['FUEL', 'OFFICE', 'SALARY', 'REFRESHMENT', 'TRAVEL', 'PRINTING', 'MAINTENANCE', 'MISCELLANEOUS'],
-      default: 'MISCELLANEOUS',
-      index: true,
-    },
-    amount: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
-    expenseDate: {
-      type: Date,
-      default: Date.now,
-      index: true,
-    },
-    paymentMode: {
-      type: String,
-      enum: ['CASH', 'UPI', 'BANK_TRANSFER', 'OTHER'],
-      default: 'CASH',
-    },
-    receiptImage: {
-      type: String,
-      default: '',
-    },
-    status: {
-      type: String,
-      enum: ['PENDING', 'APPROVED', 'REJECTED'],
-      default: 'APPROVED',
       index: true,
     },
     createdBy: {
@@ -63,10 +28,59 @@ const expenseSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
     },
-    approvalDate: {
-      type: Date,
+    type: {
+      type: String,
+      enum: ['EXPENSE', 'CASH_INJECTION'],
+      default: 'EXPENSE',
+      index: true,
     },
-    rejectionReason: {
+    category: {
+      type: String,
+      enum: [
+        'PETROL',
+        'FUEL',
+        'TEA_SNACKS',
+        'OFFICE_RENT',
+        'OFFICE',
+        'SALARY_ADVANCE',
+        'SALARY',
+        'STATIONERY',
+        'MAINTENANCE',
+        'MISC',
+        'MISCELLANEOUS',
+        'CAPITAL_INVESTMENT',
+        'OWNER_DRAWING',
+      ],
+      default: 'PETROL',
+      index: true,
+    },
+    title: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    amount: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+    date: {
+      type: Date,
+      default: Date.now,
+      index: true,
+    },
+    paymentMethod: {
+      type: String,
+      enum: ['CASH', 'UPI', 'BANK_TRANSFER', 'OTHER'],
+      default: 'CASH',
+    },
+    status: {
+      type: String,
+      enum: ['PENDING', 'APPROVED', 'REJECTED'],
+      default: 'APPROVED',
+      index: true,
+    },
+    receiptUrl: {
       type: String,
       default: '',
     },
@@ -80,7 +94,6 @@ const expenseSchema = new mongoose.Schema(
   }
 );
 
-expenseSchema.index({ companyId: 1, expenseDate: -1 });
-expenseSchema.index({ companyId: 1, category: 1, status: 1 });
+expenseSchema.index({ companyId: 1, date: -1 });
 
 module.exports = mongoose.model('Expense', expenseSchema);
