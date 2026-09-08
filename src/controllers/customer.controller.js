@@ -580,16 +580,17 @@ class CustomerController {
         $or: [{ userId: req.user.id }, { phone: req.user.phone }],
       });
 
-      if (!customer) {
-        throw ApiError.notFound('Customer profile not found');
-      }
-
-      const account = await FinanceAccount.findOne({
+      // Flexible lookup if account directly exists for company
+      const accountQuery = {
         _id: id,
         companyId: req.tenantId,
-        customerId: customer._id,
-      })
-        .populate('productId', 'name productCode frequency calculationType docChargePercentage interestPercentage')
+      };
+      if (customer) {
+        accountQuery.$or = [{ customerId: customer._id }, { customerId: req.user.id }];
+      }
+
+      const account = await FinanceAccount.findOne(accountQuery)
+        .populate('productId', 'name productCode frequency calculationType docChargePercentage interestPercentage defaultInstallments')
         .populate({
           path: 'agentId',
           populate: { path: 'userId', select: 'name phone profileImage' },
@@ -600,10 +601,46 @@ class CustomerController {
         throw ApiError.notFound('Loan account not found');
       }
 
-      const schedule = await Installment.find({
+      let schedule = await Installment.find({
         financeAccountId: account._id,
         companyId: req.tenantId,
       }).sort({ installmentNumber: 1 });
+
+      // Fallback: If no explicit Installment records in DB, generate amortization schedule dynamically!
+      if (!schedule || schedule.length === 0) {
+        const totalInst = account.totalInstallments || (account.productId ? account.productId.defaultInstallments : 100) || 100;
+        const instAmount = account.installmentAmount || Math.round((account.totalPayableAmount || account.principalAmount || 0) / (totalInst > 0 ? totalInst : 1));
+        const startDate = account.startDate ? new Date(account.startDate) : new Date();
+        const freq = account.frequency || 'DAILY';
+        const paidCount = account.paidInstallments || 0;
+        const now = new Date();
+
+        schedule = [];
+        let currDate = new Date(startDate);
+
+        for (let i = 1; i <= totalInst; i++) {
+          if (freq === 'DAILY') {
+            currDate.setDate(currDate.getDate() + 1);
+          } else if (freq === 'WEEKLY') {
+            currDate.setDate(currDate.getDate() + 7);
+          } else if (freq === 'MONTHLY') {
+            currDate.setMonth(currDate.getMonth() + 1);
+          } else {
+            currDate.setDate(currDate.getDate() + 1);
+          }
+
+          const isPaid = i <= paidCount;
+          const isOverdue = !isPaid && currDate < now;
+          schedule.push({
+            installmentNumber: i,
+            dueDate: new Date(currDate),
+            expectedAmount: instAmount,
+            paidAmount: isPaid ? instAmount : 0,
+            remainingAmount: isPaid ? 0 : instAmount,
+            status: isPaid ? 'PAID' : (isOverdue ? 'OVERDUE' : 'UPCOMING'),
+          });
+        }
+      }
 
       const payments = await Payment.find({
         financeAccountId: account._id,
