@@ -145,8 +145,8 @@ class FinanceAccountController {
         throw ApiError.notFound('Active finance product not found');
       }
 
-      // 3. Verify or Assign Agent
-      let selectedAgentId = agentId || customer.assignedAgentId;
+      // 3. Verify or Assign Agent (optional)
+      let selectedAgentId = agentId || customer.assignedAgentId || null;
       if (!selectedAgentId && req.user.role === 'AGENT') {
         const myAgent = await Agent.findOne({ companyId: req.tenantId, userId: req.user.id });
         if (myAgent) selectedAgentId = myAgent._id;
@@ -154,10 +154,6 @@ class FinanceAccountController {
       if (!selectedAgentId) {
         const defaultAgent = await Agent.findOne({ companyId: req.tenantId, status: 'ACTIVE' });
         if (defaultAgent) selectedAgentId = defaultAgent._id;
-      }
-
-      if (!selectedAgentId) {
-        throw ApiError.badRequest('Please select an agent to assign this finance account');
       }
 
       // 4. Calculate Financial Schedule
@@ -173,10 +169,15 @@ class FinanceAccountController {
         excludeSundays,
       });
 
-      // 5. Generate Account Number (e.g. FIN-2026-00001)
+      // 5. Generate safe unique Account Number (e.g. FIN-2026-00001)
       const count = await FinanceAccount.countDocuments({ companyId: req.tenantId });
       const year = new Date().getFullYear();
-      const accountNumber = `FIN-${year}-${(count + 1).toString().padStart(5, '0')}`;
+      let accountNumber = `FIN-${year}-${(count + 1).toString().padStart(5, '0')}`;
+      let aAttempts = 0;
+      while (await FinanceAccount.exists({ companyId: req.tenantId, accountNumber })) {
+        aAttempts++;
+        accountNumber = `FIN-${year}-${(count + 1 + aAttempts).toString().padStart(5, '0')}`;
+      }
 
       // 6. Create Finance Account
       const account = new FinanceAccount({

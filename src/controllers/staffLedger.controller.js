@@ -41,18 +41,23 @@ class StaffLedgerController {
         notes: notes || '',
       });
 
-      await AuditService.logAction({
+      await AuditService.log({
         companyId: req.tenantId,
-        userId: req.user.id,
+        userId: req.user.id || req.user._id,
+        userName: req.user.name || 'User',
+        userRole: req.user.role || 'ADMIN',
         action: 'CREATE_STAFF_LEDGER_ENTRY',
         module: 'STAFF',
-        description: `Recorded ${transactionType} of ₹${amount} for ${staff.name}`,
+        recordId: entry._id.toString(),
+        req,
         metadata: { staffId, transactionType, amount },
       });
 
-      return res
-        .status(201)
-        .json(ApiResponse.success(entry, 'Staff transaction recorded successfully'));
+      return ApiResponse.created(
+        res,
+        'Staff transaction recorded successfully',
+        entry
+      );
     } catch (err) {
       next(err);
     }
@@ -90,19 +95,16 @@ class StaffLedgerController {
         StaffLedger.countDocuments(query),
       ]);
 
-      return res.status(200).json(
-        ApiResponse.success(
-          {
-            entries,
-            pagination: {
-              page: Number(page),
-              limit: Number(limit),
-              total,
-              pages: Math.ceil(total / Number(limit)),
-            },
-          },
-          'Staff ledger fetched successfully'
-        )
+      return ApiResponse.success(
+        res,
+        'Staff ledger fetched successfully',
+        { entries },
+        200,
+        {
+          page: Number(page),
+          limit: Number(limit),
+          total,
+        }
       );
     } catch (err) {
       next(err);
@@ -144,18 +146,17 @@ class StaffLedgerController {
 
       const pendingAdvance = Math.max(0, advanceGiven - advanceRecovered);
 
-      return res.status(200).json(
-        ApiResponse.success(
-          {
-            salaryPaid,
-            advanceGiven,
-            advanceRecovered,
-            pendingAdvance,
-            petrolAllowance,
-            commission,
-          },
-          'Staff financial summary fetched successfully'
-        )
+      return ApiResponse.success(
+        res,
+        'Staff financial summary fetched successfully',
+        {
+          salaryPaid,
+          advanceGiven,
+          advanceRecovered,
+          pendingAdvance,
+          petrolAllowance,
+          commission,
+        }
       );
     } catch (err) {
       next(err);

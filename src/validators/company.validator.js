@@ -27,6 +27,9 @@ const updateCompanySchema = {
     email: Joi.string().email().optional(),
     phone: Joi.string().optional(),
     status: Joi.string().valid('ACTIVE', 'INACTIVE', 'SUSPENDED').optional(),
+    adminPassword: Joi.string().min(6).optional(),
+    adminName: Joi.string().optional(),
+    adminPhone: Joi.string().optional(),
     address: Joi.object({
       street: Joi.string().allow(''),
       city: Joi.string().allow(''),

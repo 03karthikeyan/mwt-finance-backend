@@ -30,7 +30,7 @@ const financeAccountSchema = new mongoose.Schema(
     agentId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Agent',
-      required: true,
+      default: null,
       index: true,
     },
     productId: {

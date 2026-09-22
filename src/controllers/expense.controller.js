@@ -1,5 +1,6 @@
 const Expense = require('../models/Expense');
 const Payment = require('../models/Payment');
+const Agent = require('../models/Agent');
 const ApiResponse = require('../utils/apiResponse');
 const ApiError = require('../utils/apiError');
 const AuditService = require('../services/audit.service');
@@ -20,38 +21,61 @@ class ExpenseController {
         receiptUrl,
         notes,
         branchId,
+        agentId,
       } = req.body;
 
       if (!title || !amount || amount <= 0) {
         throw new ApiError(400, 'Valid title and positive amount are required');
       }
 
+      // Resolve agentId: accept from body (admin) or auto-detect from authenticated agent
+      let resolvedAgentId = null;
+      const companyId = req.tenantId || req.companyId;
+      if (agentId) {
+        const agentDoc = await Agent.findOne({ _id: agentId, companyId });
+        if (!agentDoc) throw new ApiError(400, 'Agent not found in this company');
+        resolvedAgentId = agentDoc._id;
+      } else if (req.user && req.user.role === 'AGENT') {
+        const selfAgent = await Agent.findOne({ userId: req.user.id || req.user._id, companyId });
+        if (selfAgent) resolvedAgentId = selfAgent._id;
+      }
+
+      // Sanitize category & type
+      const cleanType = type === 'CASH_INJECTION' ? 'CASH_INJECTION' : 'EXPENSE';
+      const cleanCategory = (category || (cleanType === 'CASH_INJECTION' ? 'CAPITAL_INVESTMENT' : 'PETROL')).toUpperCase();
+
       const expense = await Expense.create({
-        companyId: req.tenantId || req.companyId,
-        branchId: branchId || req.user.branchId || null,
+        companyId,
+        branchId: branchId || (req.user ? req.user.branchId : null) || null,
+        agentId: resolvedAgentId || null,
         createdBy: req.user.id || req.user._id,
         title,
         amount: Number(amount),
-        type,
-        category,
-        paymentMethod,
+        type: cleanType,
+        category: cleanCategory,
+        paymentMethod: paymentMethod || 'CASH',
         date: date ? new Date(date) : new Date(),
         receiptUrl: receiptUrl || '',
         notes: notes || '',
       });
 
-      await AuditService.logAction({
-        companyId: req.tenantId || req.companyId,
+      await AuditService.log({
+        companyId,
         userId: req.user.id || req.user._id,
-        action: 'CREATE_EXPENSE',
+        userName: req.user.name || 'User',
+        userRole: req.user.role || 'AGENT',
+        action: cleanType === 'EXPENSE' ? 'CREATE_EXPENSE' : 'CREATE_CASH_INJECTION',
         module: 'EXPENSE',
-        description: `Logged ${type} of ₹${amount} (${title})`,
-        metadata: { expenseId: expense._id, amount, type, category },
+        recordId: expense._id.toString(),
+        req,
+        metadata: { expenseId: expense._id, amount, type: cleanType, category: cleanCategory, agentId: resolvedAgentId },
       });
 
-      return res
-        .status(201)
-        .json(ApiResponse.success(expense, `${type === 'EXPENSE' ? 'Expense' : 'Cash Injection'} logged successfully`));
+      return ApiResponse.created(
+        res,
+        `${cleanType === 'EXPENSE' ? 'Expense' : 'Cash Injection'} logged successfully`,
+        expense
+      );
     } catch (err) {
       next(err);
     }
@@ -62,12 +86,20 @@ class ExpenseController {
    */
   static async getExpenses(req, res, next) {
     try {
-      const { page = 1, limit = 20, startDate, endDate, category, type, branchId } = req.query;
-      const query = { companyId: req.tenantId || req.companyId };
+      const { page = 1, limit = 20, startDate, endDate, category, type, branchId, agentId } = req.query;
+      const companyId = req.tenantId || req.companyId;
+      const query = { companyId };
 
       if (type) query.type = type;
-      if (category) query.category = category;
+      if (category) query.category = category.toUpperCase();
       if (branchId) query.branchId = branchId;
+      if (agentId) query.agentId = agentId;
+
+      // Agents can only see their own expenses
+      if (req.user && req.user.role === 'AGENT') {
+        const selfAgent = await Agent.findOne({ userId: req.user.id || req.user._id, companyId });
+        if (selfAgent) query.agentId = selfAgent._id;
+      }
 
       if (startDate || endDate) {
         query.date = {};
@@ -83,26 +115,81 @@ class ExpenseController {
       const [expenses, total] = await Promise.all([
         Expense.find(query)
           .populate('createdBy', 'name role')
+          .populate({ path: 'agentId', select: 'agentCode userId', populate: { path: 'userId', select: 'name phone' } })
           .sort({ date: -1 })
           .skip(skip)
           .limit(Number(limit)),
         Expense.countDocuments(query),
       ]);
 
-      return res.status(200).json(
-        ApiResponse.success(
-          {
-            expenses,
-            pagination: {
-              page: Number(page),
-              limit: Number(limit),
-              total,
-              pages: Math.ceil(total / Number(limit)),
-            },
-          },
-          'Expenses fetched successfully'
-        )
+      return ApiResponse.success(
+        res,
+        'Expenses fetched successfully',
+        { expenses },
+        200,
+        {
+          page: Number(page),
+          limit: Number(limit),
+          total,
+        }
       );
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * Get Agent-Wise Expense Summary for Company Admin Dashboard
+   */
+  static async getAgentWiseExpenses(req, res, next) {
+    try {
+      const { date, startDate, endDate } = req.query;
+      const companyId = req.tenantId || req.companyId;
+
+      const baseDate = date ? new Date(date) : new Date();
+      const start = startDate ? new Date(startDate) : new Date(new Date(baseDate).setHours(0, 0, 0, 0));
+      const end = endDate
+        ? (() => { const d = new Date(endDate); d.setHours(23, 59, 59, 999); return d; })()
+        : new Date(new Date(baseDate).setHours(23, 59, 59, 999));
+
+      const agents = await Agent.find({ companyId, status: 'ACTIVE' })
+        .populate('userId', 'name phone profileImage');
+
+      const expenseAgg = await Expense.aggregate([
+        { $match: { companyId, date: { $gte: start, $lte: end }, agentId: { $ne: null } } },
+        {
+          $group: {
+            _id: '$agentId',
+            totalExpense: { $sum: { $cond: [{ $eq: ['$type', 'EXPENSE'] }, '$amount', 0] } },
+            totalInjection: { $sum: { $cond: [{ $eq: ['$type', 'CASH_INJECTION'] }, '$amount', 0] } },
+            count: { $sum: 1 },
+          },
+        },
+      ]);
+
+      const statsMap = {};
+      expenseAgg.forEach((e) => {
+        statsMap[e._id.toString()] = e;
+      });
+
+      const result = agents.map((agent) => {
+        const stats = statsMap[agent._id.toString()] || { totalExpense: 0, totalInjection: 0, count: 0 };
+        const user = agent.userId || {};
+        return {
+          agentId: agent._id,
+          agentCode: agent.agentCode,
+          name: user.name || 'Unknown',
+          phone: user.phone || '',
+          profileImage: agent.profileImage || user.profileImage || '',
+          monthlySalary: agent.monthlySalary || 0,
+          dailyTarget: agent.dailyTarget || 0,
+          todayExpense: stats.totalExpense,
+          todayCashHandover: stats.totalInjection,
+          expenseCount: stats.count,
+        };
+      });
+
+      return ApiResponse.success(res, 'Agent-wise expenses fetched', result);
     } catch (err) {
       next(err);
     }
@@ -187,22 +274,21 @@ class ExpenseController {
 
       const netCashInHand = cashCollected + totalCashInjections - totalExpenses;
 
-      return res.status(200).json(
-        ApiResponse.success(
-          {
-            date: startOfDay.toISOString().split('T')[0],
-            collections: {
-              cash: cashCollected,
-              upi: upiCollected,
-              bank: bankCollected,
-              total: totalCollections,
-            },
-            cashInjections: totalCashInjections,
-            expenses: totalExpenses,
-            netCashInHand: Math.max(0, netCashInHand),
+      return ApiResponse.success(
+        res,
+        'Cashbook summary fetched successfully',
+        {
+          date: startOfDay.toISOString().split('T')[0],
+          collections: {
+            cash: cashCollected,
+            upi: upiCollected,
+            bank: bankCollected,
+            total: totalCollections,
           },
-          'Cashbook summary fetched successfully'
-        )
+          cashInjections: totalCashInjections,
+          expenses: totalExpenses,
+          netCashInHand: Math.max(0, netCashInHand),
+        }
       );
     } catch (err) {
       next(err);
@@ -221,15 +307,19 @@ class ExpenseController {
         throw new ApiError(404, 'Expense entry not found');
       }
 
-      await AuditService.logAction({
+      await AuditService.log({
         companyId: req.tenantId || req.companyId,
         userId: req.user.id || req.user._id,
+        userName: req.user.name || 'User',
+        userRole: req.user.role || 'ADMIN',
         action: 'DELETE_EXPENSE',
         module: 'EXPENSE',
-        description: `Deleted expense/injection of ₹${expense.amount} (${expense.title})`,
+        recordId: expense._id.toString(),
+        req,
+        metadata: { amount: expense.amount, title: expense.title },
       });
 
-      return res.status(200).json(ApiResponse.success(null, 'Expense entry deleted successfully'));
+      return ApiResponse.success(res, 'Expense entry deleted successfully', null);
     } catch (err) {
       next(err);
     }

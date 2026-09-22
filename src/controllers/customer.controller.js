@@ -111,8 +111,11 @@ class CustomerController {
         throw ApiError.conflict(`Customer with phone '${phone}' is already registered in your company.`);
       }
 
+      // Sanitize branchId and assignedAgentId
+      const safeBranchId = (branchId && branchId.toString().trim() !== '' && branchId !== 'null' && branchId !== 'undefined') ? branchId : null;
+      let finalAgentId = (assignedAgentId && assignedAgentId.toString().trim() !== '' && assignedAgentId !== 'null' && assignedAgentId !== 'undefined') ? assignedAgentId : null;
+
       // Auto-assign agent if creator is an AGENT
-      let finalAgentId = assignedAgentId || null;
       if (req.user.role === 'AGENT' && !finalAgentId) {
         const myAgent = await Agent.findOne({ companyId: req.tenantId, userId: req.user.id });
         if (myAgent) {
@@ -125,9 +128,14 @@ class CustomerController {
         }
       }
 
-      // Generate customerCode
+      // Generate safe unique customerCode
       const count = await Customer.countDocuments({ companyId: req.tenantId });
-      const customerCode = `CUST-${(count + 1).toString().padStart(5, '0')}`;
+      let customerCode = `CUST-${(count + 1).toString().padStart(5, '0')}`;
+      let cAttempts = 0;
+      while (await Customer.exists({ companyId: req.tenantId, customerCode })) {
+        cAttempts++;
+        customerCode = `CUST-${(count + 1 + cAttempts).toString().padStart(5, '0')}`;
+      }
 
       let userId = null;
       if (createLoginAccount && email && loginPassword) {
@@ -147,7 +155,7 @@ class CustomerController {
 
       const customer = new Customer({
         companyId: req.tenantId,
-        branchId: branchId || null,
+        branchId: safeBranchId,
         assignedAgentId: finalAgentId,
         userId,
         customerCode,
@@ -198,10 +206,15 @@ class CustomerController {
                 startDate: loanStartDate ? new Date(loanStartDate) : new Date(),
               });
 
-              // Generate account number
+              // Generate safe unique account number
               const accCount = await FinanceAccount.countDocuments({ companyId: req.tenantId });
               const year = new Date().getFullYear();
-              const accountNumber = `FIN-${year}-${(accCount + 1).toString().padStart(5, '0')}`;
+              let accountNumber = `FIN-${year}-${(accCount + 1).toString().padStart(5, '0')}`;
+              let aAttempts = 0;
+              while (await FinanceAccount.exists({ companyId: req.tenantId, accountNumber })) {
+                aAttempts++;
+                accountNumber = `FIN-${year}-${(accCount + 1 + aAttempts).toString().padStart(5, '0')}`;
+              }
 
               // Create Finance Account
               loanAccount = new FinanceAccount({

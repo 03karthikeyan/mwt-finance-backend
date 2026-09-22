@@ -10,6 +10,8 @@ router.use(authenticate, requireTenant);
 router.post('/', ExpenseController.createExpense);
 router.get('/', ExpenseController.getExpenses);
 router.get('/cashbook-summary', ExpenseController.getCashbookSummary);
+router.get('/agent-wise', ExpenseController.getAgentWiseExpenses);
 router.delete('/:id', ExpenseController.deleteExpense);
+
 
 module.exports = router;

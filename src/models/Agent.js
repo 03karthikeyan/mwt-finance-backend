@@ -38,6 +38,10 @@ const agentSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    monthlySalary: {
+      type: Number,
+      default: 0,
+    },
     totalCollected: {
       type: Number,
       default: 0,

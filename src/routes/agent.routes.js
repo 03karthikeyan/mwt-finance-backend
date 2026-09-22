@@ -15,11 +15,18 @@ router.use(authenticate, requireTenant);
 router.get('/me', AgentController.getMyAgentProfile);
 router.get('/my-dashboard', AgentController.getAgentDashboard);
 router.get('/my-customers', AgentController.getMyAssignedCustomers);
+router.get('/morning-cash-report', requireRoles(ROLES.COMPANY_ADMIN, ROLES.MANAGER), AgentController.getMorningCashReport);
 
 // Company Admin agent management
 router.get('/', AgentController.getAgents);
 router.post('/', requireRoles(ROLES.COMPANY_ADMIN, ROLES.MANAGER), validate(createAgentSchema), AgentController.createAgent);
 router.put('/:id', requireRoles(ROLES.COMPANY_ADMIN, ROLES.MANAGER), AgentController.updateAgent);
 router.delete('/:id', requireRoles(ROLES.COMPANY_ADMIN, ROLES.MANAGER), AgentController.deleteAgent);
+
+// Per-agent salary & performance (admin or self via 'me')
+router.get('/me/salary-history', AgentController.getSalaryHistory);
+router.get('/me/performance', AgentController.getAgentPerformance);
+router.get('/:id/salary-history', AgentController.getSalaryHistory);
+router.get('/:id/performance', AgentController.getAgentPerformance);
 
 module.exports = router;

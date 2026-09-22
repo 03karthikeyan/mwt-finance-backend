@@ -246,12 +246,28 @@ class SuperAdminController {
    */
   static async updateCompany(req, res, next) {
     try {
-      const { id } = req.params;
-      const updates = req.body;
+      const { adminPassword, adminName, adminPhone, ...companyUpdates } = updates;
 
-      const company = await Company.findByIdAndUpdate(id, updates, { new: true });
+      const company = await Company.findByIdAndUpdate(id, companyUpdates, { new: true });
       if (!company) {
         throw ApiError.notFound('Company not found');
+      }
+
+      // Also update Company Admin user if password/name provided
+      if (adminPassword || adminName || adminPhone) {
+        const adminUser = await User.findOne({ companyId: company._id, role: ROLES.COMPANY_ADMIN });
+        if (adminUser) {
+          if (adminPassword) {
+            adminUser.password = await PasswordUtil.hash(adminPassword);
+          }
+          if (adminName) {
+            adminUser.name = adminName;
+          }
+          if (adminPhone) {
+            adminUser.phone = adminPhone;
+          }
+          await adminUser.save();
+        }
       }
 
       await AuditService.log({

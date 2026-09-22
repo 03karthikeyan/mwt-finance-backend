@@ -39,6 +39,10 @@ class AuditService {
       logger.warn(`Failed to create audit log: ${err.message}`);
     }
   }
+
+  static async logAction(params) {
+    return this.log(params || {});
+  }
 }
 
 module.exports = AuditService;

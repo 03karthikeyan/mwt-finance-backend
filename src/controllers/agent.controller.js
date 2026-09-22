@@ -114,6 +114,8 @@ class AgentController {
         assignedRoutes = [],
         dailyTarget = 0,
         commissionPercentage = 0,
+        monthlySalary = 0,
+        salary = 0,
         profileImage = '',
         proofType = 'Aadhaar Card',
         proofNumber = '',
@@ -139,6 +141,8 @@ class AgentController {
         }
       }
 
+      const effectiveSalary = Number(monthlySalary) || Number(salary) || 0;
+
       const hashedPassword = await PasswordUtil.hash(password);
       const user = new User({
         companyId: req.tenantId,
@@ -159,8 +163,9 @@ class AgentController {
         branchId: branchId || null,
         agentCode: code.toUpperCase(),
         assignedRoutes,
-        dailyTarget,
-        commissionPercentage,
+        dailyTarget: Number(dailyTarget) || 0,
+        commissionPercentage: Number(commissionPercentage) || 0,
+        monthlySalary: effectiveSalary,
         profileImage: profileImage || '',
         proofType: proofType || 'Aadhaar Card',
         proofNumber: proofNumber || '',
@@ -439,6 +444,9 @@ class AgentController {
         phone,
         dailyTarget,
         assignedRoutes,
+        monthlySalary,
+        salary,
+        commissionPercentage,
         status,
         password,
         branchId,
@@ -454,7 +462,11 @@ class AgentController {
         throw ApiError.notFound('Agent not found');
       }
 
-      if (dailyTarget !== undefined) agent.dailyTarget = dailyTarget;
+      if (dailyTarget !== undefined) agent.dailyTarget = Number(dailyTarget);
+      if (commissionPercentage !== undefined) agent.commissionPercentage = Number(commissionPercentage);
+      if (monthlySalary !== undefined || salary !== undefined) {
+        agent.monthlySalary = Number(monthlySalary !== undefined ? monthlySalary : salary) || 0;
+      }
       if (assignedRoutes !== undefined) agent.assignedRoutes = assignedRoutes;
       if (status !== undefined) agent.status = status;
       if (branchId !== undefined) agent.branchId = branchId || null;
@@ -566,6 +578,302 @@ class AgentController {
       next(error);
     }
   }
+
+  /**
+   * Get Agent Salary & Allowance History (monthly ledger)
+   */
+  static async getSalaryHistory(req, res, next) {
+    try {
+      const { id } = req.params;
+      const { months = 6 } = req.query;
+      const companyId = req.tenantId || req.companyId;
+
+      const Expense = require('../models/Expense');
+      const StaffLedger = require('../models/StaffLedger');
+
+      // Determine which agent
+      let agent;
+      if (!id || id === 'me') {
+        agent = await Agent.findOne({ userId: req.user.id || req.user._id, companyId });
+      } else {
+        agent = await Agent.findOne({ _id: id, companyId });
+      }
+      if (!agent) throw ApiError.notFound('Agent record not found');
+
+      const startDate = new Date();
+      startDate.setMonth(startDate.getMonth() - Number(months));
+      startDate.setDate(1);
+      startDate.setHours(0, 0, 0, 0);
+
+      const [salaryExpenses, staffEntries] = await Promise.all([
+        // All expenses and cash handovers for this agent
+        Expense.find({
+          companyId,
+          agentId: agent._id,
+          date: { $gte: startDate },
+        }).sort({ date: -1 }),
+        // Any staff ledger records if linked
+        StaffLedger.find({
+          companyId,
+          staffId: agent.userId,
+          date: { $gte: startDate },
+        }).sort({ date: -1 }),
+      ]);
+
+      // Group by month
+      const monthlyMap = {};
+      const ensureMonth = (key) => {
+        if (!monthlyMap[key]) {
+          monthlyMap[key] = {
+            month: key,
+            salary: 0,
+            advance: 0,
+            allowance: 0,
+            fuel: 0,
+            cashHandover: 0,
+            entries: [],
+          };
+        }
+        return monthlyMap[key];
+      };
+
+      salaryExpenses.forEach((exp) => {
+        const d = new Date(exp.date);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        const m = ensureMonth(key);
+
+        if (exp.type === 'CASH_INJECTION') {
+          m.cashHandover += exp.amount;
+        } else if (exp.category === 'SALARY') {
+          m.salary += exp.amount;
+        } else if (exp.category === 'SALARY_ADVANCE') {
+          m.advance += exp.amount;
+        } else if (['PETROL', 'FUEL'].includes(exp.category)) {
+          m.fuel += exp.amount;
+        } else {
+          m.allowance += exp.amount;
+        }
+
+        m.entries.push({
+          _id: exp._id,
+          title: exp.title,
+          amount: exp.amount,
+          category: exp.category,
+          type: exp.type,
+          date: exp.date,
+          notes: exp.notes,
+        });
+      });
+
+      staffEntries.forEach((entry) => {
+        const d = new Date(entry.date);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        const m = ensureMonth(key);
+
+        if (entry.transactionType === 'SALARY_PAYOUT') m.salary += entry.amount;
+        else if (entry.transactionType === 'ADVANCE_GIVEN') m.advance += entry.amount;
+        else if (entry.transactionType === 'PETROL_ALLOWANCE') m.fuel += entry.amount;
+        else m.allowance += entry.amount;
+
+        m.entries.push({
+          _id: entry._id,
+          title: entry.transactionType.replace(/_/g, ' '),
+          amount: entry.amount,
+          category: entry.transactionType,
+          type: 'STAFF_LEDGER',
+          date: entry.date,
+          notes: entry.notes,
+        });
+      });
+
+      const history = Object.values(monthlyMap).sort((a, b) => b.month.localeCompare(a.month));
+
+      return ApiResponse.success(res, 'Salary history retrieved', {
+        agentId: agent._id,
+        agentCode: agent.agentCode,
+        monthlySalary: agent.monthlySalary || 0,
+        history,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Get Morning Cash Report — all agents and their cash handover for today
+   */
+  static async getMorningCashReport(req, res, next) {
+    try {
+      const companyId = req.tenantId;
+      const { date } = req.query;
+      const Expense = require('../models/Expense');
+
+      const targetDate = date ? new Date(date) : new Date();
+      const startOfDay = new Date(targetDate);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(targetDate);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      const agents = await Agent.find({ companyId, status: 'ACTIVE' })
+        .populate('userId', 'name phone profileImage email');
+
+      const handoverAgg = await Expense.aggregate([
+        {
+          $match: {
+            companyId,
+            type: 'CASH_INJECTION',
+            agentId: { $ne: null },
+            date: { $gte: startOfDay, $lte: endOfDay },
+          },
+        },
+        {
+          $group: {
+            _id: '$agentId',
+            totalHandover: { $sum: '$amount' },
+            entries: {
+              $push: { title: '$title', amount: '$amount', date: '$date', notes: '$notes' },
+            },
+          },
+        },
+      ]);
+
+      const handoverMap = {};
+      handoverAgg.forEach((h) => {
+        handoverMap[h._id.toString()] = h;
+      });
+
+      // Also get today's collections per agent
+      const collectionsAgg = await Payment.aggregate([
+        {
+          $match: {
+            companyId,
+            agentId: { $ne: null },
+            paymentDate: { $gte: startOfDay, $lte: endOfDay },
+            status: 'SUCCESS',
+          },
+        },
+        { $group: { _id: '$agentId', totalCollected: { $sum: '$amount' }, count: { $sum: 1 } } },
+      ]);
+
+      const collectionsMap = {};
+      collectionsAgg.forEach((c) => {
+        collectionsMap[c._id.toString()] = c;
+      });
+
+      const report = agents.map((agent) => {
+        const handover = handoverMap[agent._id.toString()] || { totalHandover: 0, entries: [] };
+        const collections = collectionsMap[agent._id.toString()] || { totalCollected: 0, count: 0 };
+        const user = agent.userId || {};
+        return {
+          agentId: agent._id,
+          agentCode: agent.agentCode,
+          name: user.name || 'Unknown',
+          phone: user.phone || '',
+          profileImage: agent.profileImage || user.profileImage || '',
+          dailyTarget: agent.dailyTarget || 0,
+          morningCashGiven: handover.totalHandover,
+          handoverEntries: handover.entries,
+          todayCollected: collections.totalCollected,
+          todayTransactions: collections.count,
+          netBalance: collections.totalCollected - handover.totalHandover,
+        };
+      });
+
+      return ApiResponse.success(res, 'Morning cash report retrieved', {
+        date: startOfDay.toISOString().split('T')[0],
+        report,
+        totalHandedOut: report.reduce((s, r) => s + r.morningCashGiven, 0),
+        totalCollected: report.reduce((s, r) => s + r.todayCollected, 0),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Get Agent Performance — collection vs target stats
+   */
+  static async getAgentPerformance(req, res, next) {
+    try {
+      const { id } = req.params;
+      const { months = 3 } = req.query;
+      const companyId = req.tenantId;
+
+      let agent;
+      if (id === 'me') {
+        agent = await Agent.findOne({ userId: req.user.id, companyId }).populate('userId', 'name');
+      } else {
+        agent = await Agent.findOne({ _id: id, companyId }).populate('userId', 'name');
+      }
+      if (!agent) throw ApiError.notFound('Agent not found');
+
+      const startDate = new Date();
+      startDate.setMonth(startDate.getMonth() - Number(months));
+      startDate.setDate(1);
+      startDate.setHours(0, 0, 0, 0);
+
+      // Monthly collections
+      const collectionsAgg = await Payment.aggregate([
+        {
+          $match: {
+            companyId,
+            agentId: agent._id,
+            status: 'SUCCESS',
+            paymentDate: { $gte: startDate },
+          },
+        },
+        {
+          $group: {
+            _id: {
+              year: { $year: '$paymentDate' },
+              month: { $month: '$paymentDate' },
+            },
+            totalCollected: { $sum: '$amount' },
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { '_id.year': 1, '_id.month': 1 } },
+      ]);
+
+      const monthlyData = collectionsAgg.map((m) => {
+        const monthKey = `${m._id.year}-${String(m._id.month).padStart(2, '0')}`;
+        const workingDays = 26; // approx
+        const monthlyTarget = (agent.dailyTarget || 0) * workingDays;
+        const achievementPct = monthlyTarget > 0 ? Math.round((m.totalCollected / monthlyTarget) * 100) : 0;
+        const commission = ((agent.commissionPercentage || 0) / 100) * m.totalCollected;
+        return {
+          month: monthKey,
+          totalCollected: m.totalCollected,
+          count: m.count,
+          monthlyTarget,
+          achievementPercentage: achievementPct,
+          commissionEarned: Math.round(commission),
+        };
+      });
+
+      // All-time totals
+      const totalAgg = await Payment.aggregate([
+        { $match: { companyId, agentId: agent._id, status: 'SUCCESS' } },
+        { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
+      ]);
+      const allTime = totalAgg[0] || { total: 0, count: 0 };
+
+      return ApiResponse.success(res, 'Agent performance retrieved', {
+        agentId: agent._id,
+        agentCode: agent.agentCode,
+        name: agent.userId ? agent.userId.name : '',
+        dailyTarget: agent.dailyTarget || 0,
+        commissionPercentage: agent.commissionPercentage || 0,
+        monthlySalary: agent.monthlySalary || 0,
+        allTimeCollected: allTime.total,
+        allTimeTransactions: allTime.count,
+        monthlyData,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 module.exports = AgentController;
+
